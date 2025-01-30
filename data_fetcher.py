@@ -1,60 +1,58 @@
 import ccxt
 import requests
-import polars as pl
-from utils import log
-import os
+import pandas as pd
+import logging
+from datetime import datetime, timedelta
 
 class DataFetcher:
-    def __init__(self, news_api_key):
+    def __init__(self, news_api_key, log_level=logging.INFO):
         self.exchange = ccxt.mexc({'rateLimit': 1200, 'enableRateLimit': True})
         self.news_api_key = news_api_key
+        logging.basicConfig(level=log_level, format='%(asctime)s - %(levelname)s - %(message)s')
+        self.logger = logging.getLogger(__name__)
 
     def fetch_ohlcv(self, symbol, timeframe, since=None, limit=500):
         try:
-            log(f"Fetching OHLCV data for {symbol} with timeframe {timeframe}")
+            self.logger.info(f"Fetching OHLCV data for {symbol} with timeframe {timeframe}")
             ohlcv = self.exchange.fetch_ohlcv(symbol, timeframe, since=since, limit=limit)
             if not ohlcv:
-                log(f"No data returned for {symbol}", level="warning")
-                return pl.DataFrame()
-
-            df = pl.DataFrame(ohlcv, schema=["timestamp", "open", "high", "low", "close", "volume"])
-            df = df.with_column(pl.col("timestamp").apply(lambda x: datetime.fromtimestamp(x / 1000)).alias("timestamp"))
-            log(f"Successfully fetched {len(df)} rows for {symbol}")
+                self.logger.warning(f"No data returned for {symbol}")
+                return pd.DataFrame()
+            df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+            self.logger.info(f"Successfully fetched {len(df)} rows for {symbol}")
             return df
-
         except Exception as e:
-            log(f"Error fetching OHLCV data for {symbol}: {e}", level="error")
-            return pl.DataFrame()
+            self.logger.error(f"Error fetching OHLCV data for {symbol}: {e}")
+            return pd.DataFrame()
 
     def fetch_all_historical_data(self, symbol, timeframe):
-        cache_file = f"{symbol}_{timeframe}_data.parquet"
-        if os.path.exists(cache_file):
-            log(f"Loading cached data for {symbol} from {cache_file}")
-            return pl.read_parquet(cache_file)
-        else:
-            open(cache_file, "a").close()
-        log(f"Fetching all historical data for {symbol}")
-        all_data = pl.DataFrame()
+        self.logger.info(f"Fetching all historical data for {symbol}")
+        all_data = pd.DataFrame()
         since = None  # Начинаем с текущего момента
 
         while True:
+            # Запрашиваем данные порциями
             data = self.fetch_ohlcv(symbol, timeframe, since=since)
-            if data.is_empty():
+            if data.empty:
                 break  # Если данных больше нет, выходим из цикла
 
-            all_data = pl.concat([all_data, data])
-            since = int((data["timestamp"].min().timestamp() - 1) * 1000)  # Обновляем начальную дату
+            # Добавляем данные в общий DataFrame
+            all_data = pd.concat([data, all_data], ignore_index=True)
 
+            # Обновляем начальную дату для следующего запроса
+            since = int((data['timestamp'].min() - timedelta(milliseconds=1)).timestamp() * 1000)
+
+            # Если достигли даты листинга пары, выходим из цикла
             if len(data) < 500:
-                break  # Если данных меньше 500, значит, мы достигли конца
+                break
 
-        log(f"Total historical data fetched for {symbol}: {len(all_data)} rows")
-        all_data.write_parquet(cache_file)  # Кэшируем данные
+        self.logger.info(f"Total historical data fetched for {symbol}: {len(all_data)} rows")
         return all_data
 
     def fetch_news(self, query='Bitcoin', language='en', sort_by='publishedAt', page_size=5):
         try:
-            log(f"Fetching news for query: {query}")
+            self.logger.info(f"Fetching news for query: {query}")
             params = {
                 'q': query,
                 'language': language,
@@ -64,11 +62,11 @@ class DataFetcher:
             }
             response = requests.get('https://newsapi.org/v2/everything', params=params)
             if response.status_code == 200:
-                log(f"Successfully fetched {page_size} news articles")
+                self.logger.info(f"Successfully fetched {page_size} news articles")
                 return response.json()['articles']
             else:
-                log(f"Error fetching news: {response.status_code}", level="error")
+                self.logger.error(f"Error fetching news: {response.status_code}")
                 return []
         except Exception as e:
-            log(f"Error fetching news: {e}", level="error")
+            self.logger.error(f"Error fetching news: {e}")
             return []
