@@ -8,10 +8,9 @@ timeframe = '1h'
 deposit = 1000
 risk_per_trade = 0.01
 news_api_key = '3426128c3e854e9798b80603dee3b101'
-create_logs = True  # Управление логированием
 
 # Инициализация бота
-bot = TradingBot(symbols, timeframe, deposit, risk_per_trade, news_api_key, create_logs)
+bot = TradingBot(symbols, timeframe, deposit, risk_per_trade, news_api_key)
 bot.initialize()
 
 # Функция для запуска бота в бесконечном цикле

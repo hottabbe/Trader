@@ -1,62 +1,75 @@
-import xgboost as xgb
-from sklearn.metrics import accuracy_score
-import logging
-import os
+import numpy as np
+from sklearn.ensemble import RandomForestClassifier
+from utils import log
 
 class TradingModel:
-    def __init__(self, create_logs=True):
-        self.model = xgb.XGBClassifier(random_state=42)
-        self.create_logs = create_logs
-        if create_logs:
-            logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-        self.logger = logging.getLogger(__name__)
+    def __init__(self):
+        self.model = RandomForestClassifier(n_estimators=100, random_state=42)
+        self.is_trained = False  # Флаг, указывающий, обучена ли модель
 
     def train(self, X_train, y_train):
-        if X_train.empty or y_train.empty:
-            if self.create_logs:
-                self.logger.warning("Empty training data received. Skipping training.")
-            return
+        """
+        Обучает модель на предоставленных данных.
+        """
+        try:
+            # Проверяем, что данные не пусты
+            if X_train.size == 0 or y_train.size == 0:
+                log("Training data is empty. Skipping training.", level="warning")
+                return
 
-        if self.create_logs:
-            self.logger.info("Training the model")
-        self.model.fit(X_train, y_train)
-        if self.create_logs:
-            self.logger.info("Model training completed")
+            # Проверяем, что данные не содержат NaN
+            if np.isnan(X_train).any() or np.isnan(y_train).any():
+                log("Training data contains NaN values. Cleaning data...", level="warning")
+                mask = ~np.isnan(X_train).any(axis=1) & ~np.isnan(y_train)
+                X_train = X_train[mask]
+                y_train = y_train[mask]
+
+            log("Training the model")
+            self.model.fit(X_train, y_train)
+            self.is_trained = True  # Устанавливаем флаг, что модель обучена
+            log("Model training completed successfully")
+        except Exception as e:
+            log(f"Error during model training: {e}", level="error")
+            raise
 
     def predict(self, X):
-        if X.empty:
-            if self.create_logs:
-                self.logger.warning("Empty DataFrame received for prediction. Returning default value.")
-            return [0]  # Возвращаем значение по умолчанию
+        """
+        Предсказывает сигнал на основе предоставленных данных.
+        """
+        try:
+            if X.size == 0:
+                log("Prediction data is empty. Skipping prediction.", level="warning")
+                return np.array([])
 
-        if self.create_logs:
-            self.logger.info("Making predictions")
-        return self.model.predict(X)
+            if not self.is_trained:
+                raise ValueError("Model is not trained. Call 'train' before making predictions.")
+
+            log("Predicting signals")
+            return self.model.predict(X)
+        except Exception as e:
+            log(f"Error during prediction: {e}", level="error")
+            raise
 
     def evaluate(self, X_test, y_test):
-        if X_test.empty or y_test.empty:
-            if self.create_logs:
-                self.logger.warning("Empty test data received. Skipping evaluation.")
-            return 0.0
+        """
+        Оценивает точность модели на тестовых данных.
+        """
+        try:
+            if X_test.size == 0 or y_test.size == 0:
+                log("Test data is empty. Skipping evaluation.", level="warning")
+                return 0.0
 
-        if self.create_logs:
-            self.logger.info("Evaluating the model")
-        predictions = self.model.predict(X_test)
-        accuracy = accuracy_score(y_test, predictions)
-        if self.create_logs:
-            self.logger.info(f'Model accuracy on test data: {accuracy:.2%}')
-        return accuracy
+            # Проверяем, что данные не содержат NaN
+            if np.isnan(X_test).any() or np.isnan(y_test).any():
+                log("Test data contains NaN values. Cleaning data...", level="warning")
+                mask = ~np.isnan(X_test).any(axis=1) & ~np.isnan(y_test)
+                X_test = X_test[mask]
+                y_test = y_test[mask]
 
-    def save_model(self, filename):
-        if self.create_logs:
-            self.logger.info(f"Saving model to {filename}")
-        self.model.save_model(filename)
-
-    def load_model(self, filename):
-        if os.path.exists(filename):
-            if self.create_logs:
-                self.logger.info(f"Loading model from {filename}")
-            self.model.load_model(filename)
-        else:
-            if self.create_logs:
-                self.logger.warning(f"Model file {filename} not found.")
+            log("Evaluating the model")
+            accuracy = self.model.score(X_test, y_test)
+            log(f"Model evaluation completed with accuracy: {accuracy:.2%}")
+            return accuracy
+        except Exception as e:
+            log(f"Error during model evaluation: {e}", level="error")
+            raise
