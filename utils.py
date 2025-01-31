@@ -30,26 +30,36 @@ def log(message, level="info"):
     elif level == "error" and log_level >= 1:
         logger.error(message)
 
-def save_model(model, filename):
+def save_model(model, filename, data=None):
     """
-    Сохраняет модель в файл.
+    Сохраняет модель и данные в файл.
+    :param model: Объект модели.
+    :param filename: Имя файла для сохранения.
+    :param data: Данные (например, self.all_data).
     """
     try:
         with open(filename, "wb") as f:
-            pickle.dump(model, f)
-        log(f"Model saved to {filename}", level="info")
+            if data is not None:
+                pickle.dump({"model": model, "data": data}, f)
+            else:
+                pickle.dump({"model": model}, f)
+        log(f"Model and data saved to {filename}", level="info")
     except Exception as e:
         log(f"Error saving model to {filename}: {e}", level="error")
 
 def load_model(filename):
     """
-    Загружает модель из файла.
+    Загружает модель и данные из файла.
+    :param filename: Имя файла для загрузки.
+    :return: Модель и данные (если есть).
     """
     try:
         with open(filename, "rb") as f:
-            model = pickle.load(f)
-        log(f"Model loaded from {filename}", level="info")
-        return model
+            saved_data = pickle.load(f)
+            model = saved_data.get("model")
+            data = saved_data.get("data")
+            log(f"Model and data loaded from {filename}", level="info")
+            return model, data
     except Exception as e:
         log(f"Error loading model from {filename}: {e}", level="error")
-        return None
+        return None, None

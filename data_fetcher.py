@@ -2,12 +2,28 @@ import ccxt
 import requests
 import pandas as pd
 from datetime import datetime, timedelta
+import time  # Добавляем импорт модуля time
 from utils import log
 
 class DataFetcher:
     def __init__(self, news_api_key):
         self.exchange = ccxt.mexc({'rateLimit': 1200, 'enableRateLimit': True})
         self.news_api_key = news_api_key
+
+    def timeframe_to_seconds(self, timeframe):
+        """
+        Конвертирует таймфрейм в секунды.
+        :param timeframe: Таймфрейм (например, '1h').
+        :return: Количество секунд.
+        """
+        if timeframe.endswith('m'):
+            return int(timeframe[:-1]) * 60
+        elif timeframe.endswith('h'):
+            return int(timeframe[:-1]) * 3600
+        elif timeframe.endswith('d'):
+            return int(timeframe[:-1]) * 86400
+        else:
+            raise ValueError(f"Unsupported timeframe: {timeframe}")
 
     def fetch_ohlcv(self, symbol, timeframe, since=None, limit=500):
         """
@@ -32,6 +48,26 @@ class DataFetcher:
             log(f"Error fetching OHLCV data for {symbol}: {e}", level="error")
             return pd.DataFrame()
 
+    def fetch_ohlcv_with_offset(self, symbol, timeframe, limit=500, offset=0):
+        """
+        Получает OHLCV-данные с учетом смещения во времени.
+        :param symbol: Торговая пара (например, 'BTC/USDT').
+        :param timeframe: Таймфрейм (например, '1h').
+        :param limit: Количество строк данных.
+        :param offset: Смещение во времени (в количестве свечей).
+        :return: DataFrame с данными.
+        """
+        try:
+            since = int((time.time() - (limit + offset) * self.timeframe_to_seconds(timeframe)) * 1000)
+            ohlcv = self.exchange.fetch_ohlcv(symbol, timeframe, since=since, limit=limit)
+            df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+            df.set_index('timestamp', inplace=True)
+            return df
+        except Exception as e:
+            log(f"Error fetching OHLCV data for {symbol}: {e}", level="error")
+            return pd.DataFrame()
+
     def fetch_all_historical_data(self, symbol, timeframe, max_iterations=11):
         """
         Получает все исторические данные для указанного символа и таймфрейма.
@@ -48,8 +84,10 @@ class DataFetcher:
             if data.empty:
                 break  # Если данных больше нет, выходим из цикла
 
-            # Логируем количество строк, индексов и значений
-            log(f"Iteration {iteration + 1}: Fetched {len(data)} rows, {len(data.index)} indices, {len(data.values)} values")
+            # Логируем общее количество строк и временной промежуток
+            start_date = data['timestamp'].min().strftime('%Y-%m-%d %H:%M:%S')
+            end_date = data['timestamp'].max().strftime('%Y-%m-%d %H:%M:%S')
+            log(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} {symbol}: {len(all_data) + len(data)} rows ({start_date} - {end_date})")
 
             # Убедимся, что индексы уникальны и сброшены
             data.reset_index(drop=True, inplace=True)
@@ -57,9 +95,6 @@ class DataFetcher:
             # Добавляем данные в общий DataFrame
             all_data = pd.concat([all_data, data], ignore_index=True)
             total_rows += len(data)
-
-            # Логируем общее количество строк, индексов и значений
-            log(f"Total after iteration {iteration + 1}: {len(all_data)} rows, {len(all_data.index)} indices, {len(all_data.values)} values")
 
             # Обновляем начальную дату для следующего запроса
             since = int((data['timestamp'].min() - timedelta(milliseconds=1)).timestamp() * 1000)
@@ -69,7 +104,7 @@ class DataFetcher:
             if len(data) < 500:
                 break
 
-        log(f"Total historical data fetched for {symbol}: {total_rows} rows, {len(all_data.index)} indices, {len(all_data.values)} values")
+        log(f"Total historical data fetched for {symbol}: {total_rows} rows")
         return all_data
 
     def fetch_news(self, query='Bitcoin', language='en', sort_by='publishedAt', page_size=5):

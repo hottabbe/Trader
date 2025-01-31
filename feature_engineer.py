@@ -35,28 +35,34 @@ class FeatureEngineer:
         # Рассчитываем индикаторы и сдвигаем их, чтобы длина совпадала
         if len(close) >= 14:
             rsi = ti.rsi(close, period=14)
-            data.loc[len(data) - len(rsi):, "rsi"] = rsi  # Сдвигаем RSI
+            data.iloc[-len(rsi):, data.columns.get_loc('rsi')] = rsi  # Используем .iloc и get_loc
+
         if len(close) >= 20:
             ema_20 = ti.ema(close, period=20)
-            data.loc[len(data) - len(ema_20):, "ema_20"] = ema_20  # Сдвигаем EMA
+            data.iloc[-len(ema_20):, data.columns.get_loc('ema_20')] = ema_20
+
         if len(close) >= 26:
             macd, macd_signal, _ = ti.macd(close, short_period=12, long_period=26, signal_period=9)
-            data.loc[len(data) - len(macd):, "macd"] = macd  # Сдвигаем MACD
-            data.loc[len(data) - len(macd_signal):, "macd_signal"] = macd_signal  # Сдвигаем MACD Signal
+            data.iloc[-len(macd):, data.columns.get_loc('macd')] = macd
+            data.iloc[-len(macd_signal):, data.columns.get_loc('macd_signal')] = macd_signal
+
         if len(high) >= 14 and len(low) >= 14 and len(close) >= 14:
             atr = ti.atr(high, low, close, period=14)
-            data.loc[len(data) - len(atr):, "atr"] = atr  # Сдвигаем ATR
+            data.iloc[-len(atr):, data.columns.get_loc('atr')] = atr
+
         if len(close) >= 20:
             upper_band, middle_band, lower_band = ti.bbands(close, period=20, stddev=2)
-            data.loc[len(data) - len(upper_band):, "upper_band"] = upper_band  # Сдвигаем Bollinger Bands
-            data.loc[len(data) - len(middle_band):, "middle_band"] = middle_band
-            data.loc[len(data) - len(lower_band):, "lower_band"] = lower_band
+            data.iloc[-len(upper_band):, data.columns.get_loc('upper_band')] = upper_band
+            data.iloc[-len(middle_band):, data.columns.get_loc('middle_band')] = middle_band
+            data.iloc[-len(lower_band):, data.columns.get_loc('lower_band')] = lower_band
+
         if len(high) >= 14 and len(low) >= 14 and len(close) >= 14:
             adx = ti.adx(high, low, close, period=14)
-            data.loc[len(data) - len(adx):, "adx"] = adx  # Сдвигаем ADX
+            data.iloc[-len(adx):, data.columns.get_loc('adx')] = adx
+
         if len(close) >= 1 and len(volume) >= 1:
             obv = ti.obv(close, volume)
-            data.loc[len(data) - len(obv):, "obv"] = obv  # Сдвигаем OBV
+            data.iloc[-len(obv):, data.columns.get_loc('obv')] = obv
 
         # Добавляем пользовательские индикаторы
         data["return"] = data["close"].pct_change()

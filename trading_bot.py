@@ -29,37 +29,53 @@ class TradingBot:
         try:
             log("Initializing bot")
 
-            # Загружаем модель, если файл существует
+            # Загружаем модель и данные, если файл существует
             if os.path.exists("brain.model"):
-                log("Loading model from brain.model")
-                self.model = load_model("brain.model")
+                log("Loading model and data from brain.model")
+                self.model, self.all_data = load_model("brain.model")
 
                 # Проверяем, что модель загружена и обучена
                 if not self.model.is_trained:
                     log("Loaded model is not trained. Deleting brain.model and training a new model.", level="warning")
                     os.remove("brain.model")
                     self.model = TradingModel()  # Создаем новую модель
+                    self.all_data = pd.DataFrame()  # Сбрасываем данные
                 else:
-                    log("Model loaded successfully.")
+                    log("Model and data loaded successfully.")
             else:
                 log("No existing model found. Training a new model.")
+                self.all_data = pd.DataFrame()  # Инициализируем пустой DataFrame
 
             # Если модель не загружена, обучаем с нуля
             if not self.model.is_trained:
-                for symbol in self.symbols:
-                    log(f"Fetching historical data for {symbol}")
-                    data = self.data_fetcher.fetch_all_historical_data(symbol, self.timeframe)
-                    if data.empty:
-                        log(f"No data for {symbol}. Skipping.", level="warning")
-                        continue
+                offset = 0
+                while True:
+                    for symbol in self.symbols:
+                        log(f"Fetching historical data for {symbol}")
+                        data = self.data_fetcher.fetch_ohlcv_with_offset(symbol, self.timeframe, limit=500, offset=offset)
+                        if data.empty:
+                            log(f"No data for {symbol}. Stopping data collection.", level="warning")
+                            break
 
-                    log(f"Creating features for {symbol}")
-                    data = self.feature_engineer.create_features(data)
-                    data["symbol"] = symbol
-                    self.all_data = pd.concat([self.all_data, data])
+                        log(f"Creating features for {symbol}")
+                        data = self.feature_engineer.create_features(data)
+                        data["symbol"] = symbol
+                        self.all_data = pd.concat([self.all_data, data])
 
-                if self.all_data.empty:
-                    raise ValueError("No data available for model initialization.")
+                        # Логируем общее количество данных и временной промежуток
+                        start_date = self.all_data.index.min().strftime('%Y-%m-%d %H:%M:%S')
+                        end_date = self.all_data.index.max().strftime('%Y-%m-%d %H:%M:%S')
+                        log(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {symbol}: {len(self.all_data)} rows ({start_date} - {end_date})")
+
+                    if self.all_data.empty:
+                        raise ValueError("No data available for model initialization.")
+
+                    # Увеличиваем смещение для следующей итерации
+                    offset += 500
+
+                    # Если данных достаточно, выходим из цикла
+                    if len(self.all_data) >= 1500:  # Например, собираем минимум 1500 строк
+                        break
 
                 # Создаем целевую переменную
                 self.all_data["signal"] = (self.all_data["return"].shift(-1) > 0).astype(int)
@@ -89,13 +105,12 @@ class TradingBot:
                 accuracy = self.model.evaluate(X_test, y_test)
                 log(f"Model accuracy on test data: {accuracy:.2%}")
 
-                # Сохраняем модель в файл
-                save_model(self.model, "brain.model")
+                # Сохраняем модель и данные в файл
+                save_model(self.model, "brain.model", self.all_data)
 
         except Exception as e:
             log(f"Error during bot initialization: {e}", level="error")
             raise
-
     def backtest_signal(self, data, iterations=100):
         """
         Проводит бэктестинг сигналов на исторических данных.
@@ -159,7 +174,7 @@ class TradingBot:
                         continue
 
                     # Проводим бэктестинг перед принятием решения
-                    if not self.all_data.empty:  # Проверяем, что данные есть
+                    if not self.all_data.empty:
                         accuracy = self.backtest_signal(self.all_data)
                         log(f"Backtesting accuracy for {symbol}: {accuracy:.2%}")
                     else:
@@ -193,9 +208,9 @@ class TradingBot:
                     y = self.all_data["signal"].values
                     self.model.train(X, y)
 
-                    # Перезаписываем модель
-                    log("Updating model in brain.model")
-                    save_model(self.model, "brain.model")
+                    # Перезаписываем модель и данные
+                    log("Updating model and data in brain.model")
+                    save_model(self.model, "brain.model", self.all_data)
 
                 time.sleep(60 * 60)
 
