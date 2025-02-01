@@ -5,36 +5,30 @@ from utils import log
 
 class Backtester:
     def __init__(self, model, risk_manager):
-        """
-        Инициализация бэктестера.
-        :param model: Объект модели TradingModel.
-        :param risk_manager: Объект RiskManager для управления рисками.
-        """
         self.model = model
-        self.risk_manager = risk_manager  # Добавляем RiskManager
+        self.risk_manager = risk_manager
 
     def run(self, data, iterations=100):
         """
         Проводит бэктестинг на исторических данных.
-        :param data: DataFrame с историческими данными.
-        :param iterations: Количество итераций для бэктестинга.
-        :return: Точность модели в процентах.
         """
         if data.empty:
-            log("No data available for backtesting. Skipping.", level="warning")
-            return 0.0
+            return 0.0, 0.0  # Возвращаем точность и прибыль/убыток
 
         try:
-            log(f"Running backtest with {iterations} iterations")
             correct_predictions = 0
+            total_profit = 0.0
 
             for _ in range(iterations):
                 # Случайным образом выбираем точку входа
                 idx = random.randint(0, len(data) - 101)
                 entry_point = data.iloc[idx]
-                entry_price = entry_point["close"]
 
-                # Получаем ATR для расчета рисков
+                # Проверяем, что данные не содержат NaN
+                if entry_point.isnull().any():
+                    continue
+
+                entry_price = entry_point["close"]
                 atr = entry_point["atr"]
 
                 # Рассчитываем стоп-лосс и тейк-профит
@@ -48,14 +42,16 @@ class Backtester:
                     current_price = data.iloc[i]["close"]
                     if current_price >= take_profit:
                         correct_predictions += 1
+                        total_profit += (take_profit - entry_price) * self.risk_manager.calculate_position_size(1000, 0.01, entry_price, stop_loss)
                         break
                     elif current_price <= stop_loss:
+                        total_profit += (stop_loss - entry_price) * self.risk_manager.calculate_position_size(1000, 0.01, entry_price, stop_loss)
                         break
 
             accuracy = correct_predictions / iterations
-            log(f"Backtest completed with accuracy: {accuracy:.2%}")
-            return accuracy
+            profit_percentage = (total_profit / 1000) * 100  # Прибыль/убыток в процентах от депозита
+            return accuracy, profit_percentage
 
         except Exception as e:
             log(f"Error during backtesting: {e}", level="error")
-            return 0.0
+            return 0.0, 0.0

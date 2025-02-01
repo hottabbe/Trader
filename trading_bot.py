@@ -4,12 +4,14 @@ import pandas as pd
 import os
 import time
 from datetime import timedelta
-from utils import log, save_model, load_model, setup_logging
+from utils import log, save_model, load_model, setup_logging, validate_data, convert_timestamps, log_data_range, prepare_lstm_data
 from data_fetcher import DataFetcher
 from feature_engineer import FeatureEngineer
 from risk_manager import RiskManager
 from trading_model import TradingModel
 from backtester import Backtester
+from lstm_model import LSTMModel
+import traceback
 
 class TradingBot:
     def __init__(self, symbols, timeframe, deposit, risk_per_trade, news_api_key):
@@ -21,7 +23,8 @@ class TradingBot:
         self.feature_engineer = FeatureEngineer()
         self.risk_manager = RiskManager()
         self.model = TradingModel()
-        self.backtester = Backtester(self.model,self.risk_manager)
+        self.lstm_model = None  # Модель LSTM
+        self.backtester = Backtester(self.model, self.risk_manager)
         self.all_data = pd.DataFrame()
         setup_logging()
 
@@ -32,7 +35,7 @@ class TradingBot:
             # Загружаем модель и данные, если файл существует
             if os.path.exists("brain.model"):
                 log("Loading model and data from brain.model")
-                self.model, self.all_data = load_model("brain.model")
+                self.model, self.all_data, self.lstm_model = load_model("brain.model")
 
                 # Проверяем, что модель загружена и обучена
                 if not self.model.is_trained:
@@ -40,42 +43,45 @@ class TradingBot:
                     os.remove("brain.model")
                     self.model = TradingModel()  # Создаем новую модель
                     self.all_data = pd.DataFrame()  # Сбрасываем данные
+                    self.lstm_model = None  # Сбрасываем LSTM
                 else:
-                    log("Model and data loaded successfully.")
+                log("Model and data loaded successfully.")
             else:
                 log("No existing model found. Training a new model.")
                 self.all_data = pd.DataFrame()  # Инициализируем пустой DataFrame
+                self.lstm_model = None  # Инициализируем LSTM
 
             # Если модель не загружена, обучаем с нуля
             if not self.model.is_trained:
-                offset = 0
-                while True:
-                    for symbol in self.symbols:
-                        log(f"Fetching historical data for {symbol}")
-                        data = self.data_fetcher.fetch_ohlcv_with_offset(symbol, self.timeframe, limit=500, offset=offset)
-                        if data.empty:
-                            log(f"No data for {symbol}. Stopping data collection.", level="warning")
-                            break
+                for symbol in self.symbols:
+                    log(f"Fetching historical data for {symbol}")
+                    data = self.data_fetcher.fetch_all_historical_data(symbol, self.timeframe)
+                    if data.empty:
+                        log(f"No data for {symbol}. Skipping.", level="warning")
+                        continue
 
-                        log(f"Creating features for {symbol}")
-                        data = self.feature_engineer.create_features(data)
-                        data["symbol"] = symbol
-                        self.all_data = pd.concat([self.all_data, data])
+                    # Преобразуем временные метки
+                    data = convert_timestamps(data)
 
-                        # Логируем общее количество данных и временной промежуток
-                        start_date = self.all_data.index.min().strftime('%Y-%m-%d %H:%M:%S')
-                        end_date = self.all_data.index.max().strftime('%Y-%m-%d %H:%M:%S')
-                        log(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {symbol}: {len(self.all_data)} rows ({start_date} - {end_date})")
+                    # Проверяем данные на корректность
+                    if not validate_data(data):
+                        log(f"Invalid data for {symbol}. Skipping.", level="warning")
+                        continue
 
-                    if self.all_data.empty:
-                        raise ValueError("No data available for model initialization.")
+                    log(f"Creating features for {symbol}")
+                    data = self.feature_engineer.create_features(data)
+                    if data.empty:
+                        log(f"No data after feature creation for {symbol}. Skipping.", level="warning")
+                        continue
 
-                    # Увеличиваем смещение для следующей итерации
-                    offset += 500
+                    data["symbol"] = symbol
+                    self.all_data = pd.concat([self.all_data, data])
 
-                    # Если данных достаточно, выходим из цикла
-                    if len(self.all_data) >= 1500:  # Например, собираем минимум 1500 строк
-                        break
+                if self.all_data.empty:
+                    raise ValueError("No data available for model initialization.")
+
+                # Логируем временной промежуток данных
+                log_data_range(self.all_data)
 
                 # Создаем целевую переменную
                 self.all_data["signal"] = (self.all_data["return"].shift(-1) > 0).astype(int)
@@ -105,12 +111,20 @@ class TradingBot:
                 accuracy = self.model.evaluate(X_test, y_test)
                 log(f"Model accuracy on test data: {accuracy:.2%}")
 
+                # Обучаем LSTM
+                log("Preparing data for LSTM")
+                X_lstm, y_lstm, scaler = prepare_lstm_data(self.all_data)
+                self.lstm_model = LSTMModel(input_shape=(X_lstm.shape[1], X_lstm.shape[2]))
+                self.lstm_model.train(X_lstm, y_lstm)
+
                 # Сохраняем модель и данные в файл
-                save_model(self.model, "brain.model", self.all_data)
+                save_model(self.model, "brain.model", self.all_data, self.lstm_model)
 
         except Exception as e:
             log(f"Error during bot initialization: {e}", level="error")
+            traceback.print_exc()  # Выводим полный стектрейс ошибки
             raise
+        
     def backtest_signal(self, data, iterations=100):
         """
         Проводит бэктестинг сигналов на исторических данных.
@@ -138,11 +152,10 @@ class TradingBot:
         explanation += f"- OBV: {latest_data['obv'].iloc[0]:.2f} (volume flow)\n"
         explanation += "Signal: BUY (price expected to rise)\n" if signal == 1 else "Signal: SELL (price expected to fall)\n"
         explanation += f"Entry price: {entry_price:.2f}\n"
-        explanation += f"Stop loss: {stop_loss:.2f}\n"
-        explanation += f"Take profit: {take_profit:.2f}\n"
-        explanation += f"Position size: {position_size:.4f} {latest_data['symbol'].iloc[0].split('/')[0]}\n"
+        explanation += f"TP: {take_profit:.2f} - Potential profit: {(take_profit - entry_price) * position_size:.2f}$\n"
+        explanation += f"SL: {stop_loss:.2f} - Potential loss: {(entry_price - stop_loss) * position_size:.2f}$\n"
         return explanation
-
+    
     def run(self):
         while True:
             try:
@@ -175,10 +188,8 @@ class TradingBot:
 
                     # Проводим бэктестинг перед принятием решения
                     if not self.all_data.empty:
-                        accuracy = self.backtest_signal(self.all_data)
+                        accuracy = self.backtester.run(self.all_data)
                         log(f"Backtesting accuracy for {symbol}: {accuracy:.2%}")
-                    else:
-                        log("No historical data available for backtesting. Skipping.", level="warning")
 
                     # Проверяем, обучена ли модель
                     if not self.model.is_trained:
@@ -208,9 +219,9 @@ class TradingBot:
                     y = self.all_data["signal"].values
                     self.model.train(X, y)
 
-                    # Перезаписываем модель и данные
-                    log("Updating model and data in brain.model")
-                    save_model(self.model, "brain.model", self.all_data)
+                    # Перезаписываем модель
+                    log("Updating model in brain.model")
+                    save_model(self.model, "brain.model")
 
                 time.sleep(60 * 60)
 

@@ -9,10 +9,17 @@ class FeatureEngineer:
         Создает технические индикаторы на основе OHLCV-данных с использованием tulipy.
         """
         if data.empty:
+            log("Input data is empty. Skipping feature creation.", level="warning")
             return data
 
-        # Логируем количество строк, индексов и значений перед обработкой
-        log(f"Creating features for {len(data)} rows, {len(data.index)} indices, {len(data.values)} values")
+        # Логируем количество строк перед обработкой
+        log(f"Creating features for {len(data)} rows")
+
+        # Минимальное количество строк для расчета индикаторов
+        min_rows = 50  # Например, RSI требует минимум 14 строк
+        if len(data) < min_rows:
+            log(f"Not enough data for indicators (min {min_rows} rows required). Skipping.", level="warning")
+            return data
 
         # Рассчитываем технические индикаторы
         close = data["close"].values
@@ -35,7 +42,7 @@ class FeatureEngineer:
         # Рассчитываем индикаторы и сдвигаем их, чтобы длина совпадала
         if len(close) >= 14:
             rsi = ti.rsi(close, period=14)
-            data.iloc[-len(rsi):, data.columns.get_loc('rsi')] = rsi  # Используем .iloc и get_loc
+            data.iloc[-len(rsi):, data.columns.get_loc('rsi')] = rsi
 
         if len(close) >= 20:
             ema_20 = ti.ema(close, period=20)
@@ -72,10 +79,20 @@ class FeatureEngineer:
         # Добавляем volume_profile (скользящее среднее объема)
         data["volume_profile"] = data["volume"].rolling(window=14).mean()
 
+        # Логируем количество строк перед удалением NaN
+        log(f"Rows before dropping NaN: {len(data)}")
+
         # Удаляем строки с NaN (из-за расчета индикаторов)
         data.dropna(inplace=True)
 
-        # Логируем количество строк, индексов и значений после обработки
-        log(f"Features created for {len(data)} rows, {len(data.index)} indices, {len(data.values)} values")
+        # Логируем количество строк после удаления NaN
+        log(f"Rows after dropping NaN: {len(data)}")
+
+        if data.empty:
+            log("Data is empty after dropping NaN. Check your indicators.", level="error")
+            return data
+
+        # Логируем количество строк после обработки
+        log(f"Features created for {len(data)} rows")
 
         return data
