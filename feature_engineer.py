@@ -6,7 +6,7 @@ from utils import log
 class FeatureEngineer:
     def create_features(self, data):
         """
-        Создает технические индикаторы на основе OHLCV-данных с использованием tulipy.
+        Создает технические индикаторы на основе OHLCV-данных.
         """
         if data.empty:
             log("Input data is empty. Skipping feature creation.", level="warning")
@@ -16,7 +16,7 @@ class FeatureEngineer:
         log(f"Creating features for {len(data)} rows")
 
         # Минимальное количество строк для расчета индикаторов
-        min_rows = 50  # Например, RSI требует минимум 14 строк
+        min_rows = 50
         if len(data) < min_rows:
             log(f"Not enough data for indicators (min {min_rows} rows required). Skipping.", level="warning")
             return data
@@ -27,49 +27,61 @@ class FeatureEngineer:
         low = data["low"].values
         volume = data["volume"].values
 
-        # Примеры индикаторов
-        data["rsi"] = np.nan
-        data["ema_20"] = np.nan
-        data["macd"] = np.nan
-        data["macd_signal"] = np.nan
-        data["atr"] = np.nan
-        data["upper_band"] = np.nan
-        data["middle_band"] = np.nan
-        data["lower_band"] = np.nan
-        data["adx"] = np.nan
-        data["obv"] = np.nan
+        # Добавляем индикаторы с проверкой длины
+        try:
+            # SMA
+            sma_50 = ti.sma(close, period=50)
+            data['sma_50'] = np.nan  # Инициализируем колонку NaN
+            data.iloc[-len(sma_50):, data.columns.get_loc('sma_50')] = sma_50  # Заполняем только валидные значения
 
-        # Рассчитываем индикаторы и сдвигаем их, чтобы длина совпадала
-        if len(close) >= 14:
-            rsi = ti.rsi(close, period=14)
-            data.iloc[-len(rsi):, data.columns.get_loc('rsi')] = rsi
+            sma_200 = ti.sma(close, period=200)
+            data['sma_200'] = np.nan
+            data.iloc[-len(sma_200):, data.columns.get_loc('sma_200')] = sma_200
 
-        if len(close) >= 20:
+            # EMA
             ema_20 = ti.ema(close, period=20)
+            data['ema_20'] = np.nan
             data.iloc[-len(ema_20):, data.columns.get_loc('ema_20')] = ema_20
 
-        if len(close) >= 26:
+            # RSI
+            rsi = ti.rsi(close, period=14)
+            data['rsi'] = np.nan
+            data.iloc[-len(rsi):, data.columns.get_loc('rsi')] = rsi
+
+            # MACD
             macd, macd_signal, _ = ti.macd(close, short_period=12, long_period=26, signal_period=9)
+            data['macd'] = np.nan
             data.iloc[-len(macd):, data.columns.get_loc('macd')] = macd
+            data['macd_signal'] = np.nan
             data.iloc[-len(macd_signal):, data.columns.get_loc('macd_signal')] = macd_signal
 
-        if len(high) >= 14 and len(low) >= 14 and len(close) >= 14:
+            # ATR
             atr = ti.atr(high, low, close, period=14)
+            data['atr'] = np.nan
             data.iloc[-len(atr):, data.columns.get_loc('atr')] = atr
 
-        if len(close) >= 20:
+            # Bollinger Bands
             upper_band, middle_band, lower_band = ti.bbands(close, period=20, stddev=2)
+            data['upper_band'] = np.nan
             data.iloc[-len(upper_band):, data.columns.get_loc('upper_band')] = upper_band
+            data['middle_band'] = np.nan
             data.iloc[-len(middle_band):, data.columns.get_loc('middle_band')] = middle_band
+            data['lower_band'] = np.nan
             data.iloc[-len(lower_band):, data.columns.get_loc('lower_band')] = lower_band
 
-        if len(high) >= 14 and len(low) >= 14 and len(close) >= 14:
+            # ADX
             adx = ti.adx(high, low, close, period=14)
+            data['adx'] = np.nan
             data.iloc[-len(adx):, data.columns.get_loc('adx')] = adx
 
-        if len(close) >= 1 and len(volume) >= 1:
+            # OBV
             obv = ti.obv(close, volume)
+            data['obv'] = np.nan
             data.iloc[-len(obv):, data.columns.get_loc('obv')] = obv
+
+        except Exception as e:
+            log(f"Error calculating indicators: {e}", level="error")
+            return data
 
         # Добавляем пользовательские индикаторы
         data["return"] = data["close"].pct_change()

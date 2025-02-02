@@ -58,7 +58,7 @@ class DataFetcher:
         :return: DataFrame с данными.
         """
         try:
-            since = int((time.time() - (limit + offset) * self.timeframe_to_seconds(timeframe)) * 1000)
+            since = int((time.time() - (limit + offset) * self.timeframe_to_seconds(timeframe)) * 500)
             ohlcv = self.exchange.fetch_ohlcv(symbol, timeframe, since=since, limit=limit)
             df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
@@ -79,8 +79,8 @@ class DataFetcher:
         iteration = 0
 
         while iteration < max_iterations:
-            # Запрашиваем данные порциями
-            data = self.fetch_ohlcv(symbol, timeframe, since=since)
+            # Запрашиваем данные порциями по 1000 свечей
+            data = self.fetch_ohlcv(symbol, timeframe, since=since, limit=500)
             if data.empty:
                 break  # Если данных больше нет, выходим из цикла
 
@@ -97,7 +97,8 @@ class DataFetcher:
             total_rows += len(data)
 
             # Обновляем начальную дату для следующего запроса
-            since = int((data['timestamp'].min() - timedelta(milliseconds=1)).timestamp() * 1000)
+            # Используем минимальную временную метку из текущих данных минус 500 часов
+            since = int((data['timestamp'].min() - pd.Timedelta(hours=500)).timestamp() * 1000)
             iteration += 1
 
             # Если достигли даты листинга пары, выходим из цикла
@@ -106,7 +107,7 @@ class DataFetcher:
 
         log(f"Total historical data fetched for {symbol}: {total_rows} rows")
         return all_data
-
+        
     def fetch_news(self, query='Bitcoin', language='en', sort_by='publishedAt', page_size=5):
         """
         Получает новости, связанные с криптовалютой.

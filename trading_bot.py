@@ -1,9 +1,6 @@
-import random
-import numpy as np
 import pandas as pd
 import os
 import time
-from datetime import timedelta
 from utils import log, save_model, load_model, setup_logging, validate_data, convert_timestamps, log_data_range, prepare_lstm_data
 from data_fetcher import DataFetcher
 from feature_engineer import FeatureEngineer
@@ -45,7 +42,7 @@ class TradingBot:
                     self.all_data = pd.DataFrame()  # Сбрасываем данные
                     self.lstm_model = None  # Сбрасываем LSTM
                 else:
-                log("Model and data loaded successfully.")
+                    log("Model and data loaded successfully.")
             else:
                 log("No existing model found. Training a new model.")
                 self.all_data = pd.DataFrame()  # Инициализируем пустой DataFrame
@@ -125,43 +122,12 @@ class TradingBot:
             traceback.print_exc()  # Выводим полный стектрейс ошибки
             raise
         
-    def backtest_signal(self, data, iterations=100):
-        """
-        Проводит бэктестинг сигналов на исторических данных.
-        """
-        if data.empty:
-            log("No data available for backtesting. Skipping.", level="warning")
-            return 0.0  # Возвращаем точность 0%, если данных нет
-
-        return self.backtester.run(data, iterations)
-
-    def generate_explanation(self, latest_data, signal, entry_price, stop_loss, take_profit, position_size):
-        """
-        Генерирует объяснение для торгового решения.
-        """
-        explanation = "Decision based on the following indicators:\n"
-        explanation += f"- Momentum: {latest_data['momentum'].iloc[0]:.4f} (trend)\n"
-        explanation += f"- Volatility: {latest_data['volatility'].iloc[0]:.4f} (risk)\n"
-        explanation += f"- RSI: {latest_data['rsi'].iloc[0]:.2f} (overbought/oversold)\n"
-        explanation += f"- EMA 20: {latest_data['ema_20'].iloc[0]:.2f} (mid-term trend)\n"
-        explanation += f"- MACD: {latest_data['macd'].iloc[0]:.4f}, Signal: {latest_data['macd_signal'].iloc[0]:.4f} (trend dynamics)\n"
-        explanation += f"- Volume Profile: {latest_data['volume_profile'].iloc[0]:.2f} (trading activity)\n"
-        explanation += f"- ATR: {latest_data['atr'].iloc[0]:.2f} (volatility)\n"
-        explanation += f"- Bollinger Bands: Upper {latest_data['upper_band'].iloc[0]:.2f}, Lower {latest_data['lower_band'].iloc[0]:.2f} (volatility boundaries)\n"
-        explanation += f"- ADX: {latest_data['adx'].iloc[0]:.2f} (trend strength)\n"
-        explanation += f"- OBV: {latest_data['obv'].iloc[0]:.2f} (volume flow)\n"
-        explanation += "Signal: BUY (price expected to rise)\n" if signal == 1 else "Signal: SELL (price expected to fall)\n"
-        explanation += f"Entry price: {entry_price:.2f}\n"
-        explanation += f"TP: {take_profit:.2f} - Potential profit: {(take_profit - entry_price) * position_size:.2f}$\n"
-        explanation += f"SL: {stop_loss:.2f} - Potential loss: {(entry_price - stop_loss) * position_size:.2f}$\n"
-        return explanation
-    
     def run(self):
         while True:
             try:
                 for symbol in self.symbols:
                     log(f"Fetching latest data for {symbol}")
-                    latest_data = self.data_fetcher.fetch_ohlcv(symbol, self.timeframe, limit=100)
+                    latest_data = self.data_fetcher.fetch_ohlcv(symbol, self.timeframe, limit=500)  # Увеличили до 500 свечей
                     if latest_data.empty:
                         log(f"No new data for {symbol}. Skipping.", level="warning")
                         continue
@@ -188,8 +154,8 @@ class TradingBot:
 
                     # Проводим бэктестинг перед принятием решения
                     if not self.all_data.empty:
-                        accuracy = self.backtester.run(self.all_data)
-                        log(f"Backtesting accuracy for {symbol}: {accuracy:.2%}")
+                        accuracy, profit = self.backtester.run(self.all_data)  # Получаем кортеж
+                        log(f"Backtesting accuracy for {symbol}: {accuracy:.2%}, Profit: {profit:.2f}%")  # Форматируем оба значения
 
                     # Проверяем, обучена ли модель
                     if not self.model.is_trained:
@@ -201,8 +167,9 @@ class TradingBot:
                     signal = self.model.predict(X)[0]
                     signal = -1 if signal == 0 else 1
 
-                    entry_price = latest_data["close"].iloc[0]
-                    stop_loss, take_profit = self.risk_manager.calculate_risk_management(entry_price, latest_data["atr"].iloc[0])
+                    # Рассчитываем точки входа, стоп-лосса и тейк-профита
+                    entry_price = latest_data["close"].iloc[-1]
+                    stop_loss, take_profit = self.risk_manager.calculate_risk_management(entry_price, latest_data["atr"].iloc[-1])
 
                     # Если сигнал на продажу, меняем местами стоп-лосс и тейк-профит
                     if signal == -1:
@@ -227,4 +194,5 @@ class TradingBot:
 
             except Exception as e:
                 log(f"Error during bot execution: {e}", level="error")
+                traceback.print_exc()
                 time.sleep(60)

@@ -12,12 +12,10 @@ class TradingModel:
         Обучает модель на предоставленных данных.
         """
         try:
-            # Проверяем, что данные не пусты
             if X_train.size == 0 or y_train.size == 0:
                 log("Training data is empty. Skipping training.", level="warning")
                 return
 
-            # Проверяем, что данные не содержат NaN
             if np.isnan(X_train).any() or np.isnan(y_train).any():
                 log("Training data contains NaN values. Cleaning data...", level="warning")
                 mask = ~np.isnan(X_train).any(axis=1) & ~np.isnan(y_train)
@@ -26,7 +24,7 @@ class TradingModel:
 
             log("Training the model")
             self.model.fit(X_train, y_train)
-            self.is_trained = True  # Устанавливаем флаг, что модель обучена
+            self.is_trained = True
             log("Model training completed successfully")
         except Exception as e:
             log(f"Error during model training: {e}", level="error")
@@ -59,7 +57,6 @@ class TradingModel:
                 log("Test data is empty. Skipping evaluation.", level="warning")
                 return 0.0
 
-            # Проверяем, что данные не содержат NaN
             if np.isnan(X_test).any() or np.isnan(y_test).any():
                 log("Test data contains NaN values. Cleaning data...", level="warning")
                 mask = ~np.isnan(X_test).any(axis=1) & ~np.isnan(y_test)
