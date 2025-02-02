@@ -196,3 +196,24 @@ class TradingBot:
                 log(f"Error during bot execution: {e}", level="error")
                 traceback.print_exc()
                 time.sleep(60)
+                
+    def generate_explanation(self, latest_data, signal, entry_price, stop_loss, take_profit, position_size):
+        """
+        Генерирует объяснение для торгового решения.
+        """
+        explanation = "Decision based on the following indicators:\n"
+        explanation += f"- Momentum: {latest_data['momentum'].iloc[0]:.4f} (trend)\n"
+        explanation += f"- Volatility: {latest_data['volatility'].iloc[0]:.4f} (risk)\n"
+        explanation += f"- RSI: {latest_data['rsi'].iloc[0]:.2f} (overbought/oversold)\n"
+        explanation += f"- EMA 20: {latest_data['ema_20'].iloc[0]:.2f} (mid-term trend)\n"
+        explanation += f"- MACD: {latest_data['macd'].iloc[0]:.4f}, Signal: {latest_data['macd_signal'].iloc[0]:.4f} (trend dynamics)\n"
+        explanation += f"- Volume Profile: {latest_data['volume_profile'].iloc[0]:.2f} (trading activity)\n"
+        explanation += f"- ATR: {latest_data['atr'].iloc[0]:.2f} (volatility)\n"
+        explanation += f"- Bollinger Bands: Upper {latest_data['upper_band'].iloc[0]:.2f}, Lower {latest_data['lower_band'].iloc[0]:.2f} (volatility boundaries)\n"
+        explanation += f"- ADX: {latest_data['adx'].iloc[0]:.2f} (trend strength)\n"
+        explanation += f"- OBV: {latest_data['obv'].iloc[0]:.2f} (volume flow)\n"
+        explanation += "Signal: BUY (price expected to rise)\n" if signal == 1 else "Signal: SELL (price expected to fall)\n"
+        explanation += f"Entry price: {entry_price:.2f}\n"
+        explanation += f"TP: {take_profit:.2f} - Potential profit: {(take_profit - entry_price) * position_size:.2f}$\n"
+        explanation += f"SL: {stop_loss:.2f} - Potential loss: {(entry_price - stop_loss) * position_size:.2f}$\n"
+        return explanation
