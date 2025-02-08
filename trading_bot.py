@@ -20,9 +20,16 @@ class TradingBot:
         self.feature_engineer = FeatureEngineer()
         self.risk_manager = RiskManager()
         self.model = TradingModel()
-        self.lstm_model = None  # Модель LSTM
+        self.lstm_model = None
         self.backtester = Backtester(self.model, self.risk_manager)
         self.all_data = pd.DataFrame()
+        
+        # Глобальный список required_columns
+        self.required_columns = [
+            'momentum', 'volatility', 'rsi_14', 'ema_20', 'macd', 'macd_signal', 
+            'volume_profile', 'atr_14', 'upper_band', 'lower_band', 'adx_14', 'obv'
+        ]
+        
         setup_logging()
 
     def initialize(self):
@@ -52,10 +59,15 @@ class TradingBot:
             if not self.model.is_trained:
                 for symbol in self.symbols:
                     log(f"Fetching historical data for {symbol}")
-                    data = self.data_fetcher.fetch_all_historical_data(symbol, self.timeframe)
-                    if data.empty:
-                        log(f"No data for {symbol}. Skipping.", level="warning")
-                        continue
+                    if self.all_data.empty:
+                        data = self.data_fetcher.fetch_all_historical_data(symbol, self.timeframe)
+                    else:
+                        # Получаем данные, начиная с самой ранней временной метки
+                        earliest_timestamp = self.all_data['timestamp'].min()
+                        data = self.data_fetcher.fetch_all_historical_data(symbol, self.timeframe, since=int(earliest_timestamp.timestamp() * 1000))
+                        if data.empty:
+                            log(f"No data for {symbol}. Skipping.", level="warning")
+                            continue
 
                     # Преобразуем временные метки
                     data = convert_timestamps(data)
@@ -80,9 +92,6 @@ class TradingBot:
                 # Логируем временной промежуток данных
                 log_data_range(self.all_data)
 
-                # Создаем целевую переменную
-                self.all_data["signal"] = (self.all_data["return"].shift(-1) > 0).astype(int)
-
                 # Разделяем данные на обучающую и тестовую выборки
                 train_data = self.all_data.iloc[:-100]  # Все данные, кроме последних 100 строк
                 test_data = self.all_data.iloc[-100:]  # Последние 100 строк
@@ -94,40 +103,35 @@ class TradingBot:
                 log(f"Test data points: {len(test_data)}")
 
                 # Обучаем модель на исторических данных
-                required_columns = ['momentum', 'volatility', 'rsi', 'ema_20', 'macd', 'macd_signal', 'volume_profile', 'atr', 'upper_band', 'lower_band', 'adx', 'obv']
-                X_train = train_data[required_columns].values
-                y_train = train_data["signal"].values
+                X_train = train_data[self.required_columns].values
+                y_train_direction = train_data["target_direction"].values
+                y_train_level = train_data["target_level"].values
 
                 log("Training the model")
-                self.model.train(X_train, y_train)
+                self.model.train(X_train, y_train_direction, y_train_level)
 
                 # Оцениваем модель на тестовых данных
-                X_test = test_data[required_columns].values
-                y_test = test_data["signal"].values
+                X_test = test_data[self.required_columns].values
+                y_test_direction = test_data["target_direction"].values
+                y_test_level = test_data["target_level"].values
 
-                accuracy = self.model.evaluate(X_test, y_test)
-                log(f"Model accuracy on test data: {accuracy:.2%}")
-
-                # Обучаем LSTM
-                log("Preparing data for LSTM")
-                X_lstm, y_lstm, scaler = prepare_lstm_data(self.all_data)
-                self.lstm_model = LSTMModel(input_shape=(X_lstm.shape[1], X_lstm.shape[2]))
-                self.lstm_model.train(X_lstm, y_lstm)
+                accuracy, mse = self.model.evaluate(X_test, y_test_direction, y_test_level)
+                log(f"Model evaluation completed with accuracy: {accuracy:.2%}, MSE: {mse:.4f}")
 
                 # Сохраняем модель и данные в файл
                 save_model(self.model, "brain.model", self.all_data, self.lstm_model)
 
         except Exception as e:
             log(f"Error during bot initialization: {e}", level="error")
-            traceback.print_exc()  # Выводим полный стектрейс ошибки
+            traceback.print_exc()
             raise
-        
+
     def run(self):
         while True:
             try:
                 for symbol in self.symbols:
                     log(f"Fetching latest data for {symbol}")
-                    latest_data = self.data_fetcher.fetch_ohlcv(symbol, self.timeframe, limit=500)  # Увеличили до 500 свечей
+                    latest_data = self.data_fetcher.fetch_ohlcv(symbol, self.timeframe, limit=500)
                     if latest_data.empty:
                         log(f"No new data for {symbol}. Skipping.", level="warning")
                         continue
@@ -136,26 +140,28 @@ class TradingBot:
                     latest_data = self.feature_engineer.create_features(latest_data)
                     latest_data["symbol"] = symbol
 
-                    required_columns = [
-                        'momentum', 'volatility', 'rsi', 'ema_20', 'macd', 'macd_signal', 
-                        'volume_profile', 'atr', 'upper_band', 'lower_band', 'adx', 'obv'
-                    ]
-                    if not all(col in latest_data.columns for col in required_columns):
+                    # Проверяем, что все необходимые колонки присутствуют
+                    if not all(col in latest_data.columns for col in self.required_columns):
                         log(f"Missing required columns for {symbol}. Skipping.", level="warning")
                         continue
 
-                    if latest_data[required_columns].isnull().any().any():
+                    if latest_data[self.required_columns].isnull().any().any():
                         log(f"NaN values found in data for {symbol}. Skipping.", level="warning")
                         continue
 
-                    if latest_data[required_columns].empty:
+                    if latest_data[self.required_columns].empty:
                         log(f"No data available for prediction for {symbol}. Skipping.", level="warning")
                         continue
 
                     # Проводим бэктестинг перед принятием решения
                     if not self.all_data.empty:
-                        accuracy, profit = self.backtester.run(self.all_data)  # Получаем кортеж
-                        log(f"Backtesting accuracy for {symbol}: {accuracy:.2%}, Profit: {profit:.2f}%")  # Форматируем оба значения
+                        accuracy, profit = self.backtester.run(self.all_data, self.deposit, self.risk_per_trade)
+                        log(f"Backtesting accuracy for {symbol}: {accuracy:.2%}, Profit: {profit:.2f}%")
+
+                        # Анализируем результаты бэктестинга
+                        if accuracy < 0.5 or profit < 0:
+                            log("Model performance is poor. Calibrating model...", level="warning")
+                            self.calibrate_model()
 
                     # Проверяем, обучена ли модель
                     if not self.model.is_trained:
@@ -163,13 +169,13 @@ class TradingBot:
                         continue
 
                     # Получаем сигнал от модели
-                    X = latest_data[required_columns].values
-                    signal = self.model.predict(X)[0]
-                    signal = -1 if signal == 0 else 1
+                    X = latest_data[self.required_columns].values
+                    direction, level = self.model.predict(X)
+                    signal = 1 if direction[0] == 1 else -1  # Преобразуем направление в сигнал (1 — лонг, -1 — шорт)
 
                     # Рассчитываем точки входа, стоп-лосса и тейк-профита
                     entry_price = latest_data["close"].iloc[-1]
-                    stop_loss, take_profit = self.risk_manager.calculate_risk_management(entry_price, latest_data["atr"].iloc[-1])
+                    stop_loss, take_profit = self.risk_manager.calculate_risk_management(entry_price, latest_data["atr_14"].iloc[-1])
 
                     # Если сигнал на продажу, меняем местами стоп-лосс и тейк-профит
                     if signal == -1:
@@ -182,9 +188,10 @@ class TradingBot:
 
                     # Добавляем новые данные и доучиваем модель
                     self.all_data = pd.concat([self.all_data, latest_data])
-                    X = self.all_data[required_columns].values
-                    y = self.all_data["signal"].values
-                    self.model.train(X, y)
+                    X = self.all_data[self.required_columns].values
+                    y_direction = self.all_data["target_direction"].values
+                    y_level = self.all_data["target_level"].values
+                    self.model.train(X, y_direction, y_level)
 
                     # Перезаписываем модель
                     log("Updating model in brain.model")
@@ -196,6 +203,90 @@ class TradingBot:
                 log(f"Error during bot execution: {e}", level="error")
                 traceback.print_exc()
                 time.sleep(60)
+
+    def calibrate_model(self):
+        """
+        Калибрует модель на основе результатов бэктестинга.
+        """
+        try:
+            log("Calibrating model...")
+
+            # Добавляем больше данных для обучения
+            for symbol in self.symbols:
+                log(f"Fetching additional historical data for {symbol}")
+                # Используйте это:
+                if self.all_data.empty:
+                    additional_data = self.data_fetcher.fetch_all_historical_data(symbol, self.timeframe)
+                else:
+                    # Получаем данные, начиная с самой ранней временной метки
+                    earliest_timestamp = self.all_data['timestamp'].min()
+                    additional_data = self.data_fetcher.fetch_all_historical_data(symbol, self.timeframe, since=int(earliest_timestamp.timestamp() * 1000))
+                if additional_data.empty:
+                    log(f"No additional data for {symbol}. Skipping.", level="warning")
+                    continue
+
+                # Преобразуем временные метки
+                additional_data = convert_timestamps(additional_data)
+
+                # Проверяем данные на корректность
+                if not validate_data(additional_data):
+                    log(f"Invalid data for {symbol}. Skipping.", level="warning")
+                    continue
+
+                log(f"Creating features for {symbol}")
+                additional_data = self.feature_engineer.create_features(additional_data)
+                if additional_data.empty:
+                    log(f"No data after feature creation for {symbol}. Skipping.", level="warning")
+                    continue
+
+                additional_data["symbol"] = symbol
+                self.all_data = pd.concat([self.all_data, additional_data])
+
+            if self.all_data.empty:
+                raise ValueError("No data available for model calibration.")
+
+            # Логируем временной промежуток данных
+            log_data_range(self.all_data)
+
+            # Создаем целевую переменную
+            self.all_data["target_direction"] = (self.all_data["close"].shift(-5) > self.all_data["close"]).astype(int)
+
+            # Разделяем данные на обучающую и тестовую выборки
+            train_data = self.all_data.iloc[:-100]  # Все данные, кроме последних 100 строк
+            test_data = self.all_data.iloc[-100:]  # Последние 100 строк
+
+            if train_data.empty or test_data.empty:
+                raise ValueError("Not enough data to create train and test sets.")
+
+            log(f"Training data points: {len(train_data)}")
+            log(f"Test data points: {len(test_data)}")
+
+            # Обучаем модель на исторических данных
+            required_columns = [
+                'momentum', 'volatility', 'rsi_14', 'ema_20', 'macd', 'macd_signal', 
+                'volume_profile', 'atr_14', 'upper_band', 'lower_band', 'adx_14', 'obv'
+            ]
+            X_train = train_data[required_columns].values
+            y_train = train_data["target_direction"].values
+
+            log("Training the model")
+            # Используйте это:
+            y_train_direction = train_data["target_direction"].values
+            y_train_level = train_data["target_level"].values
+            self.model.train(X_train, y_train_direction, y_train_level)
+            # Оцениваем модель на тестовых данных
+            X_test = test_data[required_columns].values
+            y_test = test_data["target_direction"].values
+
+            accuracy = self.model.evaluate(X_test, y_test)
+            log(f"Model accuracy on test data after calibration: {accuracy:.2%}")
+
+            # Сохраняем модель и данные в файл
+            save_model(self.model, "brain.model", self.all_data, self.lstm_model)
+
+        except Exception as e:
+            log(f"Error during model calibration: {e}", level="error")
+            traceback.print_exc()
                 
     def generate_explanation(self, latest_data, signal, entry_price, stop_loss, take_profit, position_size):
         """

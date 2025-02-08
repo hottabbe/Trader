@@ -2,7 +2,7 @@ import ccxt
 import requests
 import pandas as pd
 from datetime import datetime, timedelta
-import time  # Добавляем импорт модуля time
+import time
 from utils import log
 
 class DataFetcher:
@@ -71,6 +71,10 @@ class DataFetcher:
     def fetch_all_historical_data(self, symbol, timeframe, max_iterations=11):
         """
         Получает все исторические данные для указанного символа и таймфрейма.
+        :param symbol: Торговая пара (например, 'BTC/USDT').
+        :param timeframe: Таймфрейм (например, '1h').
+        :param max_iterations: Максимальное количество итераций.
+        :return: DataFrame с историческими данными.
         """
         log(f"Fetching all historical data for {symbol}")
         all_data = pd.DataFrame()
@@ -79,7 +83,7 @@ class DataFetcher:
         iteration = 0
 
         while iteration < max_iterations:
-            # Запрашиваем данные порциями по 1000 свечей
+            # Запрашиваем данные порциями по 500 свечей
             data = self.fetch_ohlcv(symbol, timeframe, since=since, limit=500)
             if data.empty:
                 break  # Если данных больше нет, выходим из цикла
@@ -87,7 +91,7 @@ class DataFetcher:
             # Логируем общее количество строк и временной промежуток
             start_date = data['timestamp'].min().strftime('%Y-%m-%d %H:%M:%S')
             end_date = data['timestamp'].max().strftime('%Y-%m-%d %H:%M:%S')
-            log(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} {symbol}: {len(all_data) + len(data)} rows ({start_date} - {end_date})")
+            log(f"{symbol}: {len(all_data) + len(data)} rows ({start_date} - {end_date})")
 
             # Убедимся, что индексы уникальны и сброшены
             data.reset_index(drop=True, inplace=True)
