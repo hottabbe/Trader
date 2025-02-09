@@ -35,14 +35,16 @@ def setup_logging():
     """
     Настраивает логирование в зависимости от уровня log_level.
     """
+    _format = "%(asctime)s |•| %(levelname)s |•| %(message)s"
+    dformat = "%d/%b/%y %H:%M:%S"
     if log_level == 0:
         logging.basicConfig(level=logging.CRITICAL + 1)  # Отключаем логирование
     elif log_level == 1:
-        logging.basicConfig(level=logging.ERROR, format="%(asctime)s - %(levelname)s - %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+        logging.basicConfig(level=logging.ERROR, format = _format, datefmt=dformat)
     elif log_level == 2:
-        logging.basicConfig(level=logging.WARNING, format="%(asctime)s - %(levelname)s - %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+        logging.basicConfig(level=logging.WARNING, format = _format, datefmt=dformat)
     elif log_level == 3:
-        logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+        logging.basicConfig(level=logging.INFO, format=_format, datefmt=dformat)
         
 def log(message, level="info"):
     """

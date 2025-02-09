@@ -5,9 +5,9 @@ class RiskManager:
         logging.basicConfig(level=log_level, format='%(asctime)s - %(levelname)s - %(message)s')
         self.logger = logging.getLogger(__name__)
 
-    def calculate_risk_management(entry_price, atr, risk_reward_ratio=2):
+    def calculate_risk_management(self, entry_price, atr, risk_reward_ratio=2):
         """
-        Рассчитывает стоп-лосс и тейк-профит на основе ATR.
+        Рассчитывает стоп-лосс и тейк-профит на основе ATR и соотношения риска к прибыли.
         :param entry_price: Цена входа.
         :param atr: Average True Range (ATR).
         :param risk_reward_ratio: Соотношение риска к прибыли (по умолчанию 1:2).
@@ -16,7 +16,7 @@ class RiskManager:
         stop_loss = entry_price - atr
         take_profit = entry_price + atr * risk_reward_ratio
         return stop_loss, take_profit
-
+        
     def calculate_position_size(self, deposit, risk_per_trade, entry_price, stop_loss):
         """
         Рассчитывает размер позиции на основе депозита, риска на сделку и ATR.

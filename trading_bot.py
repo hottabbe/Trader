@@ -175,7 +175,8 @@ class TradingBot:
 
                     # Рассчитываем точки входа, стоп-лосса и тейк-профита
                     entry_price = latest_data["close"].iloc[-1]
-                    stop_loss, take_profit = self.risk_manager.calculate_risk_management(entry_price, latest_data["atr_14"].iloc[-1])
+                    atr = latest_data["atr_14"].iloc[-1]
+                    stop_loss, take_profit = self.risk_manager.calculate_risk_management(entry_price, atr)
 
                     # Если сигнал на продажу, меняем местами стоп-лосс и тейк-профит
                     if signal == -1:
@@ -214,13 +215,7 @@ class TradingBot:
             # Добавляем больше данных для обучения
             for symbol in self.symbols:
                 log(f"Fetching additional historical data for {symbol}")
-                # Используйте это:
-                if self.all_data.empty:
-                    additional_data = self.data_fetcher.fetch_all_historical_data(symbol, self.timeframe)
-                else:
-                    # Получаем данные, начиная с самой ранней временной метки
-                    earliest_timestamp = self.all_data['timestamp'].min()
-                    additional_data = self.data_fetcher.fetch_all_historical_data(symbol, self.timeframe, since=int(earliest_timestamp.timestamp() * 1000))
+                additional_data = self.data_fetcher.fetch_all_historical_data(symbol, self.timeframe)
                 if additional_data.empty:
                     log(f"No additional data for {symbol}. Skipping.", level="warning")
                     continue
@@ -250,6 +245,7 @@ class TradingBot:
 
             # Создаем целевую переменную
             self.all_data["target_direction"] = (self.all_data["close"].shift(-5) > self.all_data["close"]).astype(int)
+            self.all_data["target_level"] = (self.all_data["close"].shift(-5) - self.all_data["close"]) / self.all_data["close"]
 
             # Разделяем данные на обучающую и тестовую выборки
             train_data = self.all_data.iloc[:-100]  # Все данные, кроме последних 100 строк
@@ -262,24 +258,20 @@ class TradingBot:
             log(f"Test data points: {len(test_data)}")
 
             # Обучаем модель на исторических данных
-            required_columns = [
-                'momentum', 'volatility', 'rsi_14', 'ema_20', 'macd', 'macd_signal', 
-                'volume_profile', 'atr_14', 'upper_band', 'lower_band', 'adx_14', 'obv'
-            ]
-            X_train = train_data[required_columns].values
-            y_train = train_data["target_direction"].values
-
-            log("Training the model")
-            # Используйте это:
+            X_train = train_data[self.required_columns].values
             y_train_direction = train_data["target_direction"].values
             y_train_level = train_data["target_level"].values
-            self.model.train(X_train, y_train_direction, y_train_level)
-            # Оцениваем модель на тестовых данных
-            X_test = test_data[required_columns].values
-            y_test = test_data["target_direction"].values
 
-            accuracy = self.model.evaluate(X_test, y_test)
-            log(f"Model accuracy on test data after calibration: {accuracy:.2%}")
+            log("Training the model")
+            self.model.train(X_train, y_train_direction, y_train_level)
+
+            # Оцениваем модель на тестовых данных
+            X_test = test_data[self.required_columns].values
+            y_test_direction = test_data["target_direction"].values
+            y_test_level = test_data["target_level"].values
+
+            accuracy, mse = self.model.evaluate(X_test, y_test_direction, y_test_level)
+            log(f"Model accuracy on test data after calibration: {accuracy:.2%}, MSE: {mse:.4f}")
 
             # Сохраняем модель и данные в файл
             save_model(self.model, "brain.model", self.all_data, self.lstm_model)
@@ -295,7 +287,7 @@ class TradingBot:
         explanation = "Decision based on the following indicators:\n"
         explanation += f"- Momentum: {latest_data['momentum'].iloc[0]:.4f} (trend)\n"
         explanation += f"- Volatility: {latest_data['volatility'].iloc[0]:.4f} (risk)\n"
-        explanation += f"- RSI: {latest_data['rsi'].iloc[0]:.2f} (overbought/oversold)\n"
+        explanation += f"- RSI 14: {latest_data['rsi_14'].iloc[0]:.2f} (overbought/oversold)\n"
         explanation += f"- EMA 20: {latest_data['ema_20'].iloc[0]:.2f} (mid-term trend)\n"
         explanation += f"- MACD: {latest_data['macd'].iloc[0]:.4f}, Signal: {latest_data['macd_signal'].iloc[0]:.4f} (trend dynamics)\n"
         explanation += f"- Volume Profile: {latest_data['volume_profile'].iloc[0]:.2f} (trading activity)\n"

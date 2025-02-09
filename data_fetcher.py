@@ -36,37 +36,31 @@ class DataFetcher:
                 log(f"No data returned for {symbol}", level="warning")
                 return pd.DataFrame()
             df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-
-            # Добавляем информацию о временном промежутке
-            start_date = df['timestamp'].min().strftime('%Y-%m-%d %H:%M:%S')
-            end_date = df['timestamp'].max().strftime('%Y-%m-%d %H:%M:%S')
-            log(f"Successfully fetched {len(df)} rows for {symbol} from {start_date} to {end_date}")
-
+            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')  # Преобразуем временные метки
             return df
         except Exception as e:
             log(f"Error fetching OHLCV data for {symbol}: {e}", level="error")
             return pd.DataFrame()
 
-    def fetch_ohlcv_with_offset(self, symbol, timeframe, limit=500, offset=0):
-        """
-        Получает OHLCV-данные с учетом смещения во времени.
-        :param symbol: Торговая пара (например, 'BTC/USDT').
-        :param timeframe: Таймфрейм (например, '1h').
-        :param limit: Количество строк данных.
-        :param offset: Смещение во времени (в количестве свечей).
-        :return: DataFrame с данными.
-        """
-        try:
-            since = int((time.time() - (limit + offset) * self.timeframe_to_seconds(timeframe)) * 500)
-            ohlcv = self.exchange.fetch_ohlcv(symbol, timeframe, since=since, limit=limit)
-            df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-            df.set_index('timestamp', inplace=True)
-            return df
-        except Exception as e:
-            log(f"Error fetching OHLCV data for {symbol}: {e}", level="error")
-            return pd.DataFrame()
+        def fetch_ohlcv_with_offset(self, symbol, timeframe, limit=500, offset=0):
+            """
+            Получает OHLCV-данные с учетом смещения во времени.
+            :param symbol: Торговая пара (например, 'BTC/USDT').
+            :param timeframe: Таймфрейм (например, '1h').
+            :param limit: Количество строк данных.
+            :param offset: Смещение во времени (в количестве свечей).
+            :return: DataFrame с данными.
+            """
+            try:
+                since = int((time.time() - (limit + offset) * self.timeframe_to_seconds(timeframe)) * 500)
+                ohlcv = self.exchange.fetch_ohlcv(symbol, timeframe, since=since, limit=limit)
+                df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+                df.set_index('timestamp', inplace=True)
+                return df
+            except Exception as e:
+                log(f"Error fetching OHLCV data for {symbol}: {e}", level="error")
+                return pd.DataFrame()
 
     def fetch_all_historical_data(self, symbol, timeframe, max_iterations=11):
         """
