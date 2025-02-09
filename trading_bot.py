@@ -21,14 +21,12 @@ class TradingBot:
         self.risk_manager = RiskManager()
         self.models = {}  # Словарь для хранения моделей RandomForest для каждого символа
         self.lstm_models = {}  # Словарь для хранения LSTM-моделей для каждого символа
-        self.backtester = Backtester(self.lstm_models,self.risk_manager)
-        self.all_data = {}  # Словарь для хранения данных по символам
-        
-        # Глобальный список required_columns
         self.required_columns = [
             'momentum', 'volatility', 'rsi_14', 'ema_20', 'macd', 'macd_signal', 
             'volume_profile', 'atr_14', 'upper_band', 'lower_band', 'adx_14', 'obv'
         ]
+        self.backtester = Backtester(self.models,self.lstm_models,self.risk_manager,self.required_columns)
+        self.all_data = {}  # Словарь для хранения данных по символам
         
         setup_logging()
         
@@ -175,6 +173,15 @@ class TradingBot:
                     if latest_data[self.required_columns].empty:
                         log(f"No data available for prediction for {symbol}. Skipping.", level="warning")
                         continue
+                    
+                    # Проводим бэктестинг перед принятием решения
+                    accuracy, profit = self.backtester.run(self.all_data, self.deposit, self.risk_per_trade)
+                    log(f"Backtesting accuracy for {symbol}: {accuracy:.2%}, Profit: {profit:.2f}%")
+
+                    # Анализируем результаты бэктестинга
+                    if accuracy < 0.5 or profit < 0:
+                        log("Model performance is poor. Calibrating model...", level="warning")
+                        self.calibrate_model()
 
                     # Получаем сигнал от RandomForest
                     X = latest_data[self.required_columns].values

@@ -77,7 +77,7 @@ class DataFetcher:
             return pd.DataFrame()
 
         # Получаем данные с даты листинга до текущего момента
-        all_ohlcv = []
+        all_data = pd.DataFrame()  # Инициализируем пустой DataFrame
         since = listing_date
 
         try:
@@ -90,21 +90,28 @@ class DataFetcher:
                 # Логируем общее количество строк и временной промежуток
                 start_date = data['timestamp'].min().strftime('%Y-%m-%d %H:%M:%S')
                 end_date = data['timestamp'].max().strftime('%Y-%m-%d %H:%M:%S')
-                log(f"{symbol}: {len(all_ohlcv) + len(data)} rows ({start_date} - {end_date})")
+                log(f"{symbol}: {len(all_data) + len(data)} rows ({start_date} - {end_date})")
 
-                # Добавляем данные в общий список
-                all_ohlcv.append(data)
+                # Убедимся, что индексы уникальны и сброшены
+                data.reset_index(drop=True, inplace=True)
+
+                # Добавляем данные в общий DataFrame
+                all_data = pd.concat([all_data, data], ignore_index=True)
 
                 # Обновляем начальную дату для следующего запроса
                 since = int((data['timestamp'].max() + pd.Timedelta(seconds=1)).timestamp() * 1000)
 
-            log(f"Total historical data fetched for {symbol}: {len(all_ohlcv)} rows")
-            return pd.concat(all_ohlcv, ignore_index=True) if all_ohlcv else pd.DataFrame()
+                # Если достигли текущего момента, выходим из цикла
+                if len(data) < 500:
+                    break
+
+            log(f"Total historical data fetched for {symbol}: {len(all_data)} rows")
+            return all_data
 
         except Exception as e:
             log(f"Error fetching historical data for {symbol}: {e}", level="error")
             return pd.DataFrame()
-
+        
     def find_listing_date(self, symbol, timeframe):
         """
         Находит дату листинга для указанного символа.
