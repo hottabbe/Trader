@@ -4,11 +4,9 @@ import os
 import numpy as np
 from sklearn.preprocessing import MinMaxScaler
 import pandas as pd
-import tensorflow as tf
 
 # Глобальная переменная для уровня логирования
 log_level = 3  # 0 - нет логов, 1 - ошибки, 2 - предупреждения и ошибки, 3 - все логи
-
 
 def prepare_lstm_data(data, sequence_length=50):
     """
@@ -29,23 +27,23 @@ def prepare_lstm_data(data, sequence_length=50):
 
     X, y = np.array(X), np.array(y)
     return X, y, scaler
-    
-    
+
 def setup_logging():
     """
     Настраивает логирование в зависимости от уровня log_level.
     """
-    _format = "%(asctime)s |•| %(levelname)s |•| %(message)s"
-    dformat = "%d/%b/%y %H:%M:%S"
-    if log_level == 0:
-        logging.basicConfig(level=logging.CRITICAL + 1)  # Отключаем логирование
-    elif log_level == 1:
-        logging.basicConfig(level=logging.ERROR, format = _format, datefmt=dformat)
-    elif log_level == 2:
-        logging.basicConfig(level=logging.WARNING, format = _format, datefmt=dformat)
-    elif log_level == 3:
-        logging.basicConfig(level=logging.INFO, format=_format, datefmt=dformat)
-        
+    if not logging.getLogger().hasHandlers():  # Проверяем, не настроено ли логирование уже
+        _format = "%(asctime)s |•| %(levelname)s |•| %(message)s"
+        dformat = "%d/%b/%y %H:%M:%S"
+        if log_level == 0:
+            logging.basicConfig(level=logging.CRITICAL + 1)  # Отключаем логирование
+        elif log_level == 1:
+            logging.basicConfig(level=logging.ERROR, format=_format, datefmt=dformat)
+        elif log_level == 2:
+            logging.basicConfig(level=logging.WARNING, format=_format, datefmt=dformat)
+        elif log_level == 3:
+            logging.basicConfig(level=logging.INFO, format=_format, datefmt=dformat)
+            
 def log(message, level="info"):
     """
     Логирует сообщение с указанным уровнем.
@@ -61,10 +59,6 @@ def log(message, level="info"):
 def save_model(model, filename, data=None, lstm_model=None):
     """
     Сохраняет модель и данные в файл.
-    :param model: Объект модели TradingModel.
-    :param filename: Имя файла для сохранения.
-    :param data: Данные (например, self.all_data).
-    :param lstm_model: Модель LSTM.
     """
     try:
         with open(filename, "wb") as f:
@@ -81,8 +75,6 @@ def save_model(model, filename, data=None, lstm_model=None):
 def load_model(filename):
     """
     Загружает модель и данные из файла.
-    :param filename: Имя файла для загрузки.
-    :return: Модель, данные и модель LSTM.
     """
     try:
         with open(filename, "rb") as f:
@@ -95,12 +87,10 @@ def load_model(filename):
     except Exception as e:
         log(f"Error loading model from {filename}: {e}", level="error")
         return None, None, None
-        
+
 def validate_data(data):
     """
     Проверяет данные на корректность (отсутствие NaN и корректные временные метки).
-    :param data: DataFrame с данными.
-    :return: True, если данные корректны, иначе False.
     """
     if data.empty:
         log("Data is empty.", level="warning")
@@ -115,12 +105,10 @@ def validate_data(data):
         return False
 
     return True
-    
+
 def convert_timestamps(data):
     """
     Преобразует временные метки в формат datetime.
-    :param data: DataFrame с данными.
-    :return: DataFrame с преобразованными временными метками.
     """
     if 'timestamp' in data.columns:
         data['timestamp'] = pd.to_datetime(data['timestamp'], unit='ms')
@@ -130,18 +118,24 @@ def convert_timestamps(data):
 def log_data_range(data):
     """
     Логирует временной промежуток данных.
-    :param data: DataFrame с данными.
+    Предполагается, что data.index содержит временные метки.
     """
-    if validate_data(data):
-        start_date = data.index.min().strftime('%Y-%m-%d %H:%M:%S')
-        end_date = data.index.max().strftime('%Y-%m-%d %H:%M:%S')
-        log(f"Data range: {start_date} to {end_date}")
-        
+    if not isinstance(data.index, pd.DatetimeIndex):
+        try:
+            data.index = pd.to_datetime(data.index, unit='s')
+        except Exception as e:
+            raise ValueError(f"Не удалось преобразовать индекс в datetime: {e}")
+    
+    # Получите минимальную и максимальную даты
+    start_date = data.index.min().strftime('%Y-%m-%d %H:%M:%S')
+    end_date = data.index.max().strftime('%Y-%m-%d %H:%M:%S')
+    
+    # Логирование диапазона дат
+    log(f"Data range: {start_date} to {end_date}")
+    
 def save_data(data, filename):
     """
     Сохраняет данные в файл.
-    :param data: DataFrame с данными.
-    :param filename: Имя файла для сохранения.
     """
     try:
         data.to_pickle(filename)
@@ -152,8 +146,6 @@ def save_data(data, filename):
 def load_data(filename):
     """
     Загружает данные из файла.
-    :param filename: Имя файла для загрузки.
-    :return: DataFrame с данными.
     """
     try:
         data = pd.read_pickle(filename)

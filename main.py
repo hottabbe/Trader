@@ -3,18 +3,17 @@ import threading
 import time
 
 # Настройки
-symbols = ['BTC/USDT', 'ETH/USDT', 'BNB/USDT']
-timeframe = '1h'
-deposit = 1000
-risk_per_trade = 0.01
-news_api_key = '3426128c3e854e9798b80603dee3b101'
+SYMBOLS = ['BTC/USDT', 'ETH/USDT', 'BNB/USDT']
+TIMEFRAME = '1h'
+DEPOSIT = 1000
+RISK_PER_TRADE = 0.01
 
 # Инициализация бота
-bot = TradingBot(symbols, timeframe, deposit, risk_per_trade, news_api_key)
+bot = TradingBot(SYMBOLS, TIMEFRAME, DEPOSIT, RISK_PER_TRADE)
 bot.initialize()
 
-# Функция для запуска бота в бесконечном цикле
 def run_bot():
+    """Запускает бота в бесконечном цикле с паузой между итерациями."""
     while True:
         bot.run()
         time.sleep(60 * 60)  # Пауза между итерациями (например, 1 час)

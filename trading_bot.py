@@ -1,7 +1,7 @@
 import pandas as pd
 import os
 import time
-from utils import log, save_model, load_model, setup_logging, validate_data, convert_timestamps, log_data_range, prepare_lstm_data
+from utils import log, save_model, load_model, setup_logging, validate_data, convert_timestamps, log_data_range, prepare_lstm_data,save_data,load_data
 from data_fetcher import DataFetcher
 from feature_engineer import FeatureEngineer
 from risk_manager import RiskManager
@@ -11,18 +11,18 @@ from lstm_model import LSTMModel
 import traceback
 
 class TradingBot:
-    def __init__(self, symbols, timeframe, deposit, risk_per_trade, news_api_key):
+    def __init__(self, symbols, timeframe, deposit, risk_per_trade):
         self.symbols = symbols
         self.timeframe = timeframe
         self.deposit = deposit
         self.risk_per_trade = risk_per_trade
-        self.data_fetcher = DataFetcher(news_api_key)
+        self.data_fetcher = DataFetcher()
         self.feature_engineer = FeatureEngineer()
         self.risk_manager = RiskManager()
-        self.model = TradingModel()
-        self.lstm_model = None
-        self.backtester = Backtester(self.model, self.risk_manager)
-        self.all_data = pd.DataFrame()
+        self.models = {}  # Словарь для хранения моделей RandomForest для каждого символа
+        self.lstm_models = {}  # Словарь для хранения LSTM-моделей для каждого символа
+        self.backtester = Backtester(self.lstm_models,self.risk_manager)
+        self.all_data = {}  # Словарь для хранения данных по символам
         
         # Глобальный список required_columns
         self.required_columns = [
@@ -31,43 +31,42 @@ class TradingBot:
         ]
         
         setup_logging()
-
+        
     def initialize(self):
         try:
             log("Initializing bot")
 
-            # Загружаем модель и данные, если файл существует
-            if os.path.exists("brain.model"):
-                log("Loading model and data from brain.model")
-                self.model, self.all_data, self.lstm_model = load_model("brain.model")
+            # Загружаем модели, если файлы существуют
+            for symbol in self.symbols:
+                model_filename = f"model_{symbol.replace('/', '_')}.pkl"
+                lstm_model_filename = f"lstm_model_{symbol.replace('/', '_')}.pkl"
 
-                # Проверяем, что модель загружена и обучена
-                if not self.model.is_trained:
-                    log("Loaded model is not trained. Deleting brain.model and training a new model.", level="warning")
-                    os.remove("brain.model")
-                    self.model = TradingModel()  # Создаем новую модель
-                    self.all_data = pd.DataFrame()  # Сбрасываем данные
-                    self.lstm_model = None  # Сбрасываем LSTM
+                if os.path.exists(model_filename):
+                    log(f"Loading model for {symbol} from {model_filename}")
+                    self.models[symbol], _, _ = load_model(model_filename)
                 else:
-                    log("Model and data loaded successfully.")
-            else:
-                log("No existing model found. Training a new model.")
-                self.all_data = pd.DataFrame()  # Инициализируем пустой DataFrame
-                self.lstm_model = None  # Инициализируем LSTM
+                    log(f"No existing model found for {symbol}. Training a new model.")
+                    self.models[symbol] = TradingModel()
 
-            # Если модель не загружена, обучаем с нуля
-            if not self.model.is_trained:
-                for symbol in self.symbols:
-                    log(f"Fetching historical data for {symbol}")
-                    if self.all_data.empty:
-                        data = self.data_fetcher.fetch_all_historical_data(symbol, self.timeframe)
-                    else:
-                        # Получаем данные, начиная с самой ранней временной метки
-                        earliest_timestamp = self.all_data['timestamp'].min()
-                        data = self.data_fetcher.fetch_all_historical_data(symbol, self.timeframe, since=int(earliest_timestamp.timestamp() * 1000))
-                        if data.empty:
-                            log(f"No data for {symbol}. Skipping.", level="warning")
-                            continue
+                if os.path.exists(lstm_model_filename):
+                    log(f"Loading LSTM model for {symbol} from {lstm_model_filename}")
+                    self.lstm_models[symbol] = load_model(lstm_model_filename)
+                else:
+                    log(f"No existing LSTM model found for {symbol}. Training a new model.")
+                    self.lstm_models[symbol] = LSTMModel(input_shape=(50, 5))  # Пример входной формы
+
+            # Загружаем данные для каждого символа
+            for symbol in self.symbols:
+                data_filename = f"data_{symbol.replace('/', '_')}.pkl"
+                if os.path.exists(data_filename):
+                    log(f"Loading data for {symbol} from {data_filename}")
+                    self.all_data[symbol] = load_data(data_filename)
+                else:
+                    log(f"No existing data found for {symbol}. Fetching historical data.")
+                    data = self.data_fetcher.fetch_all_historical_data(symbol, self.timeframe)
+                    if data.empty:
+                        log(f"No data for {symbol}. Skipping.", level="warning")
+                        continue
 
                     # Преобразуем временные метки
                     data = convert_timestamps(data)
@@ -77,55 +76,79 @@ class TradingBot:
                         log(f"Invalid data for {symbol}. Skipping.", level="warning")
                         continue
 
-                    log(f"Creating features for {symbol}")
-                    data = self.feature_engineer.create_features(data)
-                    if data.empty:
-                        log(f"No data after feature creation for {symbol}. Skipping.", level="warning")
-                        continue
+                    # Сохраняем данные в файл
+                    save_data(data, data_filename)
+                    self.all_data[symbol] = data
 
-                    data["symbol"] = symbol
-                    self.all_data = pd.concat([self.all_data, data])
+            # Если данные для всех символов отсутствуют, выбрасываем ошибку
+            if not self.all_data:
+                raise ValueError("No data available for model initialization.")
 
-                if self.all_data.empty:
-                    raise ValueError("No data available for model initialization.")
+            # Создаем индикаторы для каждого символа
+            for symbol, data in self.all_data.items():
+                log(f"Creating features for {symbol}")
+                data = self.feature_engineer.create_features(data)
+                if data.empty:
+                    log(f"No data after feature creation for {symbol}. Skipping.", level="warning")
+                    continue
 
-                # Логируем временной промежуток данных
-                log_data_range(self.all_data)
+                self.all_data[symbol] = data
+
+            # Логируем временной промежуток данных
+            for symbol, data in self.all_data.items():
+                log_data_range(data)
+
+            # Обучаем модели для каждого символа отдельно
+            for symbol, data in self.all_data.items():
+                log(f"Training models for {symbol}")
 
                 # Разделяем данные на обучающую и тестовую выборки
-                train_data = self.all_data.iloc[:-100]  # Все данные, кроме последних 100 строк
-                test_data = self.all_data.iloc[-100:]  # Последние 100 строк
+                train_data = data.iloc[:-100]  # Все данные, кроме последних 100 строк
+                test_data = data.iloc[-100:]  # Последние 100 строк
 
                 if train_data.empty or test_data.empty:
-                    raise ValueError("Not enough data to create train and test sets.")
+                    log(f"Not enough data to create train and test sets for {symbol}. Skipping.", level="warning")
+                    continue
 
-                log(f"Training data points: {len(train_data)}")
-                log(f"Test data points: {len(test_data)}")
+                log(f"Training data points for {symbol}: {len(train_data)}")
+                log(f"Test data points for {symbol}: {len(test_data)}")
 
-                # Обучаем модель на исторических данных
+                # Обучаем RandomForest
                 X_train = train_data[self.required_columns].values
                 y_train_direction = train_data["target_direction"].values
                 y_train_level = train_data["target_level"].values
 
-                log("Training the model")
-                self.model.train(X_train, y_train_direction, y_train_level)
+                log(f"Training RandomForest model for {symbol}")
+                self.models[symbol].train(X_train, y_train_direction, y_train_level)
 
-                # Оцениваем модель на тестовых данных
+                # Обучаем LSTM
+                X_train_lstm, y_train_lstm, _ = prepare_lstm_data(train_data)
+                log(f"Training LSTM model for {symbol}")
+                self.lstm_models[symbol].train(X_train_lstm, y_train_lstm)
+
+                # Оцениваем модели на тестовых данных
                 X_test = test_data[self.required_columns].values
                 y_test_direction = test_data["target_direction"].values
                 y_test_level = test_data["target_level"].values
 
-                accuracy, mse = self.model.evaluate(X_test, y_test_direction, y_test_level)
-                log(f"Model evaluation completed with accuracy: {accuracy:.2%}, MSE: {mse:.4f}")
+                accuracy, mse = self.models[symbol].evaluate(X_test, y_test_direction, y_test_level)
+                log(f"RandomForest evaluation for {symbol} completed with accuracy: {accuracy:.2%}, MSE: {mse:.4f}")
 
-                # Сохраняем модель и данные в файл
-                save_model(self.model, "brain.model", self.all_data, self.lstm_model)
+                X_test_lstm, y_test_lstm, _ = prepare_lstm_data(test_data)
+                lstm_loss = self.lstm_models[symbol].model.evaluate(X_test_lstm, y_test_lstm, verbose=0)
+                log(f"LSTM evaluation for {symbol} completed with loss: {lstm_loss:.4f}")
+
+                # Сохраняем модели в файлы
+                model_filename = f"model_{symbol.replace('/', '_')}.pkl"
+                lstm_model_filename = f"lstm_model_{symbol.replace('/', '_')}.pkl"
+                save_model(self.models[symbol], model_filename, None, None)
+                save_model(self.lstm_models[symbol], lstm_model_filename, None, None)
 
         except Exception as e:
             log(f"Error during bot initialization: {e}", level="error")
             traceback.print_exc()
             raise
-
+        
     def run(self):
         while True:
             try:
@@ -153,25 +176,18 @@ class TradingBot:
                         log(f"No data available for prediction for {symbol}. Skipping.", level="warning")
                         continue
 
-                    # Проводим бэктестинг перед принятием решения
-                    if not self.all_data.empty:
-                        accuracy, profit = self.backtester.run(self.all_data, self.deposit, self.risk_per_trade)
-                        log(f"Backtesting accuracy for {symbol}: {accuracy:.2%}, Profit: {profit:.2f}%")
-
-                        # Анализируем результаты бэктестинга
-                        if accuracy < 0.5 or profit < 0:
-                            log("Model performance is poor. Calibrating model...", level="warning")
-                            self.calibrate_model()
-
-                    # Проверяем, обучена ли модель
-                    if not self.model.is_trained:
-                        log("Model is not trained. Skipping prediction.", level="warning")
-                        continue
-
-                    # Получаем сигнал от модели
+                    # Получаем сигнал от RandomForest
                     X = latest_data[self.required_columns].values
-                    direction, level = self.model.predict(X)
-                    signal = 1 if direction[0] == 1 else -1  # Преобразуем направление в сигнал (1 — лонг, -1 — шорт)
+                    direction, level = self.models[symbol].predict(X)
+                    signal_rf = 1 if direction[0] == 1 else -1  # Преобразуем направление в сигнал (1 — лонг, -1 — шорт)
+
+                    # Получаем сигнал от LSTM
+                    X_lstm, _, _ = prepare_lstm_data(latest_data)
+                    predicted_price = self.lstm_models[symbol].predict(X_lstm)
+                    signal_lstm = 1 if predicted_price > latest_data["close"].iloc[-1] else -1
+
+                    # Объединяем сигналы (например, среднее значение)
+                    signal = (signal_rf + signal_lstm) / 2
 
                     # Рассчитываем точки входа, стоп-лосса и тейк-профита
                     entry_price = latest_data["close"].iloc[-1]
@@ -188,15 +204,23 @@ class TradingBot:
                     log(explanation)
 
                     # Добавляем новые данные и доучиваем модель
-                    self.all_data = pd.concat([self.all_data, latest_data])
-                    X = self.all_data[self.required_columns].values
-                    y_direction = self.all_data["target_direction"].values
-                    y_level = self.all_data["target_level"].values
-                    self.model.train(X, y_direction, y_level)
+                    if symbol in self.all_data:
+                        self.all_data[symbol] = pd.concat([self.all_data[symbol], latest_data])
+                    else:
+                        self.all_data[symbol] = latest_data
+
+                    # Объединяем данные для обучения модели
+                    combined_data = pd.concat(list(self.all_data.values()), ignore_index=True)
+
+                    # Обучаем модель на объединенных данных
+                    X = combined_data[self.required_columns].values
+                    y_direction = combined_data["target_direction"].values
+                    y_level = combined_data["target_level"].values
+                    self.models[symbol].train(X, y_direction, y_level)
 
                     # Перезаписываем модель
                     log("Updating model in brain.model")
-                    save_model(self.model, "brain.model")
+                    save_model(self.models[symbol], "brain.model")
 
                 time.sleep(60 * 60)
 
@@ -204,7 +228,7 @@ class TradingBot:
                 log(f"Error during bot execution: {e}", level="error")
                 traceback.print_exc()
                 time.sleep(60)
-
+                
     def calibrate_model(self):
         """
         Калибрует модель на основе результатов бэктестинга.
@@ -235,21 +259,28 @@ class TradingBot:
                     continue
 
                 additional_data["symbol"] = symbol
-                self.all_data = pd.concat([self.all_data, additional_data])
+                if symbol in self.all_data:
+                    self.all_data[symbol] = pd.concat([self.all_data[symbol], additional_data])
+                else:
+                    self.all_data[symbol] = additional_data
 
-            if self.all_data.empty:
+            if not self.all_data:
                 raise ValueError("No data available for model calibration.")
 
             # Логируем временной промежуток данных
-            log_data_range(self.all_data)
+            for symbol, data in self.all_data.items():
+                log_data_range(data)
+
+            # Объединяем данные для обучения модели
+            combined_data = pd.concat(list(self.all_data.values()), ignore_index=True)
 
             # Создаем целевую переменную
-            self.all_data["target_direction"] = (self.all_data["close"].shift(-5) > self.all_data["close"]).astype(int)
-            self.all_data["target_level"] = (self.all_data["close"].shift(-5) - self.all_data["close"]) / self.all_data["close"]
+            combined_data["target_direction"] = (combined_data["close"].shift(-5) > combined_data["close"]).astype(int)
+            combined_data["target_level"] = (combined_data["close"].shift(-5) - combined_data["close"]) / combined_data["close"]
 
             # Разделяем данные на обучающую и тестовую выборки
-            train_data = self.all_data.iloc[:-100]  # Все данные, кроме последних 100 строк
-            test_data = self.all_data.iloc[-100:]  # Последние 100 строк
+            train_data = combined_data.iloc[:-100]  # Все данные, кроме последних 100 строк
+            test_data = combined_data.iloc[-100:]  # Последние 100 строк
 
             if train_data.empty or test_data.empty:
                 raise ValueError("Not enough data to create train and test sets.")
@@ -273,8 +304,8 @@ class TradingBot:
             accuracy, mse = self.model.evaluate(X_test, y_test_direction, y_test_level)
             log(f"Model accuracy on test data after calibration: {accuracy:.2%}, MSE: {mse:.4f}")
 
-            # Сохраняем модель и данные в файл
-            save_model(self.model, "brain.model", self.all_data, self.lstm_model)
+            # Сохраняем модель в файл
+            save_model(self.model, "brain.model", None, self.lstm_model)
 
         except Exception as e:
             log(f"Error during model calibration: {e}", level="error")
@@ -293,7 +324,7 @@ class TradingBot:
         explanation += f"- Volume Profile: {latest_data['volume_profile'].iloc[0]:.2f} (trading activity)\n"
         explanation += f"- ATR: {latest_data['atr'].iloc[0]:.2f} (volatility)\n"
         explanation += f"- Bollinger Bands: Upper {latest_data['upper_band'].iloc[0]:.2f}, Lower {latest_data['lower_band'].iloc[0]:.2f} (volatility boundaries)\n"
-        explanation += f"- ADX: {latest_data['adx'].iloc[0]:.2f} (trend strength)\n"
+        explanation += f"- ADX: {latest_data['adx_14'].iloc[0]:.2f} (trend strength)\n"
         explanation += f"- OBV: {latest_data['obv'].iloc[0]:.2f} (volume flow)\n"
         explanation += "Signal: BUY (price expected to rise)\n" if signal == 1 else "Signal: SELL (price expected to fall)\n"
         explanation += f"Entry price: {entry_price:.2f}\n"

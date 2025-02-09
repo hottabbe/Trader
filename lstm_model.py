@@ -1,6 +1,6 @@
 import tensorflow as tf
 from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, Dense, Dropout,Input
+from tensorflow.keras.layers import LSTM, Dense, Dropout, Input
 from utils import log
 
 class LSTMModel:
@@ -9,14 +9,14 @@ class LSTMModel:
         Инициализация модели LSTM.
         :param input_shape: Форма входных данных (последовательность, признаки).
         """
-        self.model = Sequential()
-        self.model.add(Input(shape=input_shape))  # Используем Input(shape) вместо передачи input_shape в LSTM
-        self.model.add(LSTM(units=50, return_sequences=True))
-        self.model.add(Dropout(0.2))
-        self.model.add(LSTM(units=50, return_sequences=False))
-        self.model.add(Dropout(0.2))
-        self.model.add(Dense(units=1))  # Выходной слой для прогнозирования цены
-
+        self.model = Sequential([
+            Input(shape=input_shape),
+            LSTM(units=50, return_sequences=True),
+            Dropout(0.2),
+            LSTM(units=50, return_sequences=False),
+            Dropout(0.2),
+            Dense(units=1)  # Выходной слой для прогнозирования цены
+        ])
         self.model.compile(optimizer='adam', loss='mean_squared_error')
         log("LSTM model initialized.")
 
@@ -38,7 +38,7 @@ class LSTMModel:
         :return: Прогнозируемая цена.
         """
         return self.model.predict(X)
-        
+
     def train_gradually(self, X_train, y_train, X_val, y_val, max_epochs=100, target_accuracy=0.75):
         """
         Обучает модель постепенно, эпоха за эпохой, пока не достигнет целевой точности.
@@ -55,7 +55,7 @@ class LSTMModel:
             self.model.fit(X_train, y_train, epochs=1, batch_size=32, verbose=1)
 
             # Проверяем точность на валидационных данных
-            val_loss, val_accuracy = self.model.evaluate(X_val, y_val, verbose=0)
+            val_loss, val_accuracy = self.model.evaluate(X_val, y_val, verbose=1)
             log(f"Validation accuracy after epoch {epoch + 1}: {val_accuracy:.2%}")
 
             # Если точность достигнута, останавливаем обучение

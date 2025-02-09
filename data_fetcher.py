@@ -6,9 +6,8 @@ import time
 from utils import log
 
 class DataFetcher:
-    def __init__(self, news_api_key):
-        self.exchange = ccxt.mexc({'rateLimit': 1200, 'enableRateLimit': True})
-        self.news_api_key = news_api_key
+    def __init__(self):
+        self.exchange = ccxt.binance({'rateLimit': 1200, 'enableRateLimit': True})
 
     def timeframe_to_seconds(self, timeframe):
         """
@@ -62,70 +61,78 @@ class DataFetcher:
                 log(f"Error fetching OHLCV data for {symbol}: {e}", level="error")
                 return pd.DataFrame()
 
-    def fetch_all_historical_data(self, symbol, timeframe, max_iterations=11):
+    def fetch_all_historical_data(self, symbol, timeframe):
         """
-        Получает все исторические данные для указанного символа и таймфрейма.
+        Получает все исторические данные для указанного символа и таймфрейма, начиная с даты листинга.
         :param symbol: Торговая пара (например, 'BTC/USDT').
         :param timeframe: Таймфрейм (например, '1h').
-        :param max_iterations: Максимальное количество итераций.
         :return: DataFrame с историческими данными.
         """
         log(f"Fetching all historical data for {symbol}")
-        all_data = pd.DataFrame()
-        since = None  # Начинаем с текущего момента
-        total_rows = 0
-        iteration = 0
 
-        while iteration < max_iterations:
-            # Запрашиваем данные порциями по 500 свечей
-            data = self.fetch_ohlcv(symbol, timeframe, since=since, limit=500)
-            if data.empty:
-                break  # Если данных больше нет, выходим из цикла
+        # Находим дату листинга
+        listing_date = self.find_listing_date(symbol, timeframe)
+        if not listing_date:
+            log(f"Could not find listing date for {symbol}. Skipping.", level="warning")
+            return pd.DataFrame()
 
-            # Логируем общее количество строк и временной промежуток
-            start_date = data['timestamp'].min().strftime('%Y-%m-%d %H:%M:%S')
-            end_date = data['timestamp'].max().strftime('%Y-%m-%d %H:%M:%S')
-            log(f"{symbol}: {len(all_data) + len(data)} rows ({start_date} - {end_date})")
+        # Получаем данные с даты листинга до текущего момента
+        all_ohlcv = []
+        since = listing_date
 
-            # Убедимся, что индексы уникальны и сброшены
-            data.reset_index(drop=True, inplace=True)
-
-            # Добавляем данные в общий DataFrame
-            all_data = pd.concat([all_data, data], ignore_index=True)
-            total_rows += len(data)
-
-            # Обновляем начальную дату для следующего запроса
-            # Используем минимальную временную метку из текущих данных минус 500 часов
-            since = int((data['timestamp'].min() - pd.Timedelta(hours=500)).timestamp() * 1000)
-            iteration += 1
-
-            # Если достигли даты листинга пары, выходим из цикла
-            if len(data) < 500:
-                break
-
-        log(f"Total historical data fetched for {symbol}: {total_rows} rows")
-        return all_data
-        
-    def fetch_news(self, query='Bitcoin', language='en', sort_by='publishedAt', page_size=5):
-        """
-        Получает новости, связанные с криптовалютой.
-        """
         try:
-            log(f"Fetching news for query: {query}")
-            params = {
-                'q': query,
-                'language': language,
-                'sortBy': sort_by,
-                'pageSize': page_size,
-                'apiKey': self.news_api_key
-            }
-            response = requests.get('https://newsapi.org/v2/everything', params=params)
-            if response.status_code == 200:
-                log(f"Successfully fetched {page_size} news articles")
-                return response.json()['articles']
-            else:
-                log(f"Error fetching news: {response.status_code}", level="error")
-                return []
+            while True:
+                # Запрашиваем данные порциями по 500 свечей
+                data = self.fetch_ohlcv(symbol, timeframe, since=since, limit=500)
+                if data.empty:
+                    break  # Если данных больше нет, выходим из цикла
+
+                # Логируем общее количество строк и временной промежуток
+                start_date = data['timestamp'].min().strftime('%Y-%m-%d %H:%M:%S')
+                end_date = data['timestamp'].max().strftime('%Y-%m-%d %H:%M:%S')
+                log(f"{symbol}: {len(all_ohlcv) + len(data)} rows ({start_date} - {end_date})")
+
+                # Добавляем данные в общий список
+                all_ohlcv.append(data)
+
+                # Обновляем начальную дату для следующего запроса
+                since = int((data['timestamp'].max() + pd.Timedelta(seconds=1)).timestamp() * 1000)
+
+            log(f"Total historical data fetched for {symbol}: {len(all_ohlcv)} rows")
+            return pd.concat(all_ohlcv, ignore_index=True) if all_ohlcv else pd.DataFrame()
+
         except Exception as e:
-            log(f"Error fetching news: {e}", level="error")
-            return []
+            log(f"Error fetching historical data for {symbol}: {e}", level="error")
+            return pd.DataFrame()
+
+    def find_listing_date(self, symbol, timeframe):
+        """
+        Находит дату листинга для указанного символа.
+        :param symbol: Торговая пара (например, 'BTC/USDT').
+        :param timeframe: Таймфрейм (например, '1h').
+        :return: Временная метка (timestamp) даты листинга или None, если дата не найдена.
+        """
+        current_date = self.exchange.parse8601('2015-01-01T00:00:00Z')  # Очень ранняя дата
+        step = 86400 * 1000 * 30  # Шаг в миллисекундах (месяц)
+
+        try:
+            while True:
+                log(f"Checking data starting from {datetime.fromtimestamp(current_date // 1000)}")
+                ohlcv = self.exchange.fetch_ohlcv(symbol, timeframe, current_date, limit=1)
+
+                if ohlcv:
+                    listing_date = ohlcv[0][0]  # Берём временную метку первой записи
+                    log(f"Found first available record: {datetime.fromtimestamp(listing_date // 1000)}")
+                    return listing_date
+
+                # Если данных нет, увеличиваем временной диапазон
+                current_date += step
+
+                # Ограничение по времени (не будем проверять дальше 2023 года)
+                if current_date > self.exchange.parse8601('2023-01-01T00:00:00Z'):
+                    log("Exceeded maximum search time.", level="warning")
+                    return None
+
+        except Exception as e:
+            log(f"Error finding listing date: {e}", level="error")
+            return None
