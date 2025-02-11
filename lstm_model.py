@@ -28,6 +28,10 @@ class LSTMModel:
         :param epochs: Количество эпох.
         :param batch_size: Размер батча.
         """
+        if X_train.size == 0 or y_train.size == 0:
+            log("Training data is empty. Skipping training.", level="warning")
+            return
+
         self.model.fit(X_train, y_train, epochs=epochs, batch_size=batch_size, verbose=1)
         log("LSTM model trained.")
 
@@ -37,30 +41,34 @@ class LSTMModel:
         :param X: Входные данные.
         :return: Прогнозируемая цена.
         """
+        if X.size == 0:
+            log("Prediction data is empty. Skipping prediction.", level="warning")
+            return None
+
         return self.model.predict(X)
 
-    def train_gradually(self, X_train, y_train, X_val, y_val, max_epochs=100, target_accuracy=0.75):
+    def train_gradually(self, X_train, y_train, X_val, y_val, max_epochs=100, target_loss=0.01):
         """
-        Обучает модель постепенно, эпоха за эпохой, пока не достигнет целевой точности.
+        Обучает модель постепенно, эпоха за эпохой, пока не достигнет целевого значения потерь.
         :param X_train: Признаки для обучения.
         :param y_train: Целевая переменная для обучения.
         :param X_val: Признаки для валидации.
         :param y_val: Целевая переменная для валидации.
         :param max_epochs: Максимальное количество эпох.
-        :param target_accuracy: Целевая точность на валидационных данных.
+        :param target_loss: Целевое значение потерь на валидационных данных.
         :return: Количество выполненных эпох.
         """
         for epoch in range(max_epochs):
             log(f"Training epoch {epoch + 1}/{max_epochs}")
             self.model.fit(X_train, y_train, epochs=1, batch_size=32, verbose=1)
 
-            # Проверяем точность на валидационных данных
-            val_loss, val_accuracy = self.model.evaluate(X_val, y_val, verbose=1)
-            log(f"Validation accuracy after epoch {epoch + 1}: {val_accuracy:.2%}")
+            # Проверяем потери на валидационных данных
+            val_loss = self.model.evaluate(X_val, y_val, verbose=1)
+            log(f"Validation loss after epoch {epoch + 1}: {val_loss:.4f}")
 
-            # Если точность достигнута, останавливаем обучение
-            if val_accuracy >= target_accuracy:
-                log(f"Target accuracy reached. Stopping training.")
+            # Если потери достигнуты, останавливаем обучение
+            if val_loss <= target_loss:
+                log(f"Target loss reached. Stopping training.")
                 return epoch + 1
 
         log(f"Maximum epochs reached. Stopping training.")

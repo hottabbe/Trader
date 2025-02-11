@@ -1,17 +1,19 @@
 import numpy as np
 from utils import log
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
-from sklearn.linear_model import LogisticRegression
-from sklearn.svm import SVC
 from sklearn.model_selection import cross_val_score
 
 class TradingModel:
     def __init__(self):
         # Модель для классификации (направление)
-        self.classifier = RandomForestClassifier(n_estimators=200, max_depth=10, min_samples_split=5, min_samples_leaf=1, random_state=42,verbose=2,n_jobs=-1)
+        self.classifier = RandomForestClassifier(
+            n_estimators=200, max_depth=10, min_samples_split=5, min_samples_leaf=1, random_state=42, verbose=2, n_jobs=-1
+        )
         
         # Модель для регрессии (уровень)
-        self.regressor = RandomForestRegressor(n_estimators=200, max_depth=10, min_samples_split=5, min_samples_leaf=1, random_state=42,verbose=2,n_jobs=-1)
+        self.regressor = RandomForestRegressor(
+            n_estimators=200, max_depth=10, min_samples_split=5, min_samples_leaf=1, random_state=42, verbose=2, n_jobs=-1
+        )
         
         self.is_trained = False  # Флаг, указывающий, обучена ли модель
 

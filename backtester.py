@@ -1,7 +1,7 @@
 import random
 import numpy as np
 import pandas as pd
-from utils import log
+from utils import log, prepare_lstm_data
 
 class Backtester:
     def __init__(self, models, lstm_models, risk_manager, required_columns):
@@ -39,38 +39,56 @@ class Backtester:
                 symbol = random.choice(list(all_data.keys()))
                 data = all_data[symbol]
 
-                # Выбираем случайный момент в истории
-                idx = random.randint(0, len(data) - 101)  # Оставляем 100 свечей для анализа
-                current_data = data.iloc[idx]
+                # Убедимся, что данных достаточно для анализа
+                if len(data) < 500:
+                    log(f"Not enough data for {symbol}. Skipping.", level="warning")
+                    continue
+
+                # Выбираем случайный момент в истории (оставляем 500 свечей для анализа)
+                idx = random.randint(500, len(data) - 1)
+                current_data = data.iloc[idx - 500:idx]  # Берём данные за последние 500 свечей
+
+                # Проверяем, что все необходимые колонки присутствуют
+                if not all(col in current_data.columns for col in self.required_columns):
+                    log(f"Missing required columns for {symbol}. Skipping.", level="warning")
+                    continue
 
                 # Получаем сигнал от RandomForest
-                X = current_data[self.required_columns].values.reshape(1, -1)
+                X = current_data[self.required_columns].values[-1].reshape(1, -1)  # Берём последнюю строку
                 direction, level = self.models[symbol].predict(X)
                 signal_rf = 1 if direction[0] == 1 else -1  # Преобразуем направление в сигнал (1 — лонг, -1 — шорт)
 
                 # Получаем сигнал от LSTM
-                X_lstm, _, _ = prepare_lstm_data(current_data.to_frame().T)  # Преобразуем в DataFrame для LSTM
-                predicted_price = self.lstm_models[symbol].predict(X_lstm)
-                signal_lstm = 1 if predicted_price > current_data["close"] else -1
+                X_lstm, _, _ = prepare_lstm_data(current_data)
+                if X_lstm.size == 0:
+                    log(f"Not enough data for LSTM prediction for {symbol}. Skipping.", level="warning")
+                    continue
+
+                predicted_price = self.lstm_models[symbol].predict(X_lstm[-1].reshape(1, *X_lstm.shape[1:]))
+                signal_lstm = 1 if predicted_price > current_data["close"].iloc[-1] else -1
 
                 # Объединяем сигналы (например, среднее значение)
                 signal = (signal_rf + signal_lstm) / 2
 
                 # Рассчитываем точки входа, стоп-лосса и тейк-профита
-                entry_price = current_data["close"]
-                atr = current_data["atr_14"]
+                entry_price = current_data["close"].iloc[-1]
+                atr = current_data["atr_14"].iloc[-1]
+
+                # Проверяем, что ATR и цена входа корректны
+                if atr <= 0 or entry_price <= 0:
+                    log(f"Invalid ATR or entry price for {symbol}. Skipping.", level="warning")
+                    continue
+
                 stop_loss, take_profit = self.risk_manager.calculate_risk_management(entry_price, atr)
 
                 if signal == -1:
                     stop_loss, take_profit = take_profit, stop_loss
 
+                # Рассчитываем размер позиции
                 position_size = self.risk_manager.calculate_position_size(deposit, risk_per_trade, entry_price, stop_loss)
 
                 # Симулируем движение цены и закрытие позиции
-                for i in range(idx + 1, idx + 101):
-                    if i >= len(data):
-                        break  # Если вышли за пределы данных, завершаем сделку
-
+                for i in range(idx, len(data)):
                     current_price = data.iloc[i]["close"]
 
                     if signal == 1:  # Лонг
@@ -85,7 +103,7 @@ class Backtester:
                             total_profit += loss
                             deposit += loss
                             break
-                    elif signal == 0:  # Шорт
+                    elif signal == -1:  # Шорт
                         if current_price <= take_profit:
                             successful_trades += 1
                             profit = (entry_price - take_profit) * position_size

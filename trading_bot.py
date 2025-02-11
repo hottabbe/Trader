@@ -1,7 +1,10 @@
 import pandas as pd
 import os
 import time
-from utils import log, save_model, load_model, setup_logging, validate_data, convert_timestamps, log_data_range, prepare_lstm_data,save_data,load_data
+from utils import (
+    log, save_model, load_model, setup_logging, validate_data, convert_timestamps,
+    log_data_range, prepare_lstm_data, save_data, load_data, fetch_all_historical_data
+)
 from data_fetcher import DataFetcher
 from feature_engineer import FeatureEngineer
 from risk_manager import RiskManager
@@ -22,14 +25,14 @@ class TradingBot:
         self.models = {}  # Словарь для хранения моделей RandomForest для каждого символа
         self.lstm_models = {}  # Словарь для хранения LSTM-моделей для каждого символа
         self.required_columns = [
-            'momentum', 'volatility', 'rsi_14', 'ema_20', 'macd', 'macd_signal', 
+            'momentum', 'volatility', 'rsi_14', 'ema_20', 'macd', 'macd_signal',
             'volume_profile', 'atr_14', 'upper_band', 'lower_band', 'adx_14', 'obv'
         ]
-        self.backtester = Backtester(self.models,self.lstm_models,self.risk_manager,self.required_columns)
+        self.backtester = Backtester(self.models, self.lstm_models, self.risk_manager, self.required_columns)
         self.all_data = {}  # Словарь для хранения данных по символам
-        
+
         setup_logging()
-        
+
     def initialize(self):
         try:
             log("Initializing bot")
@@ -39,16 +42,20 @@ class TradingBot:
                 model_filename = f"model_{symbol.replace('/', '_')}.pkl"
                 lstm_model_filename = f"lstm_model_{symbol.replace('/', '_')}.pkl"
 
-                if os.path.exists(model_filename):
+                if os.path.exists(os.path.join("data", model_filename)):
                     log(f"Loading model for {symbol} from {model_filename}")
-                    self.models[symbol], _, _ = load_model(model_filename)
+                    model, _, _ = load_model(model_filename)
+                    self.models[symbol] = model
+                    self.models[symbol].is_trained = True  # Устанавливаем флаг, что модель обучена
                 else:
                     log(f"No existing model found for {symbol}. Training a new model.")
                     self.models[symbol] = TradingModel()
 
-                if os.path.exists(lstm_model_filename):
+                if os.path.exists(os.path.join("data", lstm_model_filename)):
                     log(f"Loading LSTM model for {symbol} from {lstm_model_filename}")
-                    self.lstm_models[symbol] = load_model(lstm_model_filename)
+                    lstm_model, _, _ = load_model(lstm_model_filename)
+                    self.lstm_models[symbol] = lstm_model
+                    self.lstm_models[symbol].is_trained = True  # Устанавливаем флаг, что модель обучена
                 else:
                     log(f"No existing LSTM model found for {symbol}. Training a new model.")
                     self.lstm_models[symbol] = LSTMModel(input_shape=(50, 5))  # Пример входной формы
@@ -56,12 +63,12 @@ class TradingBot:
             # Загружаем данные для каждого символа
             for symbol in self.symbols:
                 data_filename = f"data_{symbol.replace('/', '_')}.pkl"
-                if os.path.exists(data_filename):
+                if os.path.exists(os.path.join("data", data_filename)):
                     log(f"Loading data for {symbol} from {data_filename}")
                     self.all_data[symbol] = load_data(data_filename)
                 else:
                     log(f"No existing data found for {symbol}. Fetching historical data.")
-                    data = self.data_fetcher.fetch_all_historical_data(symbol, self.timeframe)
+                    data = fetch_all_historical_data(symbol, self.timeframe)
                     if data.empty:
                         log(f"No data for {symbol}. Skipping.", level="warning")
                         continue
@@ -96,7 +103,7 @@ class TradingBot:
             for symbol, data in self.all_data.items():
                 log_data_range(data)
 
-            # Обучаем модели для каждого символа отдельно
+            # Обучаем модели для каждого символа отдельно, если они не были загружены
             for symbol, data in self.all_data.items():
                 log(f"Training models for {symbol}")
 
@@ -111,18 +118,27 @@ class TradingBot:
                 log(f"Training data points for {symbol}: {len(train_data)}")
                 log(f"Test data points for {symbol}: {len(test_data)}")
 
-                # Обучаем RandomForest
-                X_train = train_data[self.required_columns].values
-                y_train_direction = train_data["target_direction"].values
-                y_train_level = train_data["target_level"].values
+                # Обучаем RandomForest, если модель не была загружена
+                if not hasattr(self.models[symbol], 'is_trained') or not self.models[symbol].is_trained:
+                    X_train = train_data[self.required_columns].values
+                    y_train_direction = train_data["target_direction"].values
+                    y_train_level = train_data["target_level"].values
 
-                log(f"Training RandomForest model for {symbol}")
-                self.models[symbol].train(X_train, y_train_direction, y_train_level)
+                    log(f"Training RandomForest model for {symbol}")
+                    self.models[symbol].train(X_train, y_train_direction, y_train_level)
+                    self.models[symbol].is_trained = True  # Устанавливаем флаг, что модель обучена
 
-                # Обучаем LSTM
-                X_train_lstm, y_train_lstm, _ = prepare_lstm_data(train_data)
-                log(f"Training LSTM model for {symbol}")
-                self.lstm_models[symbol].train(X_train_lstm, y_train_lstm)
+                # Обучаем LSTM, если модель не была загружена
+                if not hasattr(self.lstm_models[symbol], 'is_trained') or not self.lstm_models[symbol].is_trained:
+                    # Добавляем проверку данных перед обучением LSTM
+                    X_train_lstm, y_train_lstm, _ = prepare_lstm_data(train_data)
+                    if X_train_lstm.size == 0 or y_train_lstm.size == 0:
+                        log(f"Not enough data for LSTM training for {symbol}. Skipping.", level="warning")
+                        continue  # Пропускаем обучение для этого символа, если данных недостаточно
+
+                    log(f"Training LSTM model for {symbol}")
+                    self.lstm_models[symbol].train(X_train_lstm, y_train_lstm)
+                    self.lstm_models[symbol].is_trained = True  # Устанавливаем флаг, что модель обучена
 
                 # Оцениваем модели на тестовых данных
                 X_test = test_data[self.required_columns].values
@@ -139,14 +155,14 @@ class TradingBot:
                 # Сохраняем модели в файлы
                 model_filename = f"model_{symbol.replace('/', '_')}.pkl"
                 lstm_model_filename = f"lstm_model_{symbol.replace('/', '_')}.pkl"
-                save_model(self.models[symbol], model_filename, None, None)
-                save_model(self.lstm_models[symbol], lstm_model_filename, None, None)
+                save_model(self.models[symbol], model_filename)
+                save_model(self.lstm_models[symbol], lstm_model_filename)
 
         except Exception as e:
             log(f"Error during bot initialization: {e}", level="error")
             traceback.print_exc()
             raise
-        
+
     def run(self):
         while True:
             try:
@@ -173,9 +189,9 @@ class TradingBot:
                     if latest_data[self.required_columns].empty:
                         log(f"No data available for prediction for {symbol}. Skipping.", level="warning")
                         continue
-                    
+
                     # Проводим бэктестинг перед принятием решения
-                    accuracy, profit = self.backtester.run(self.all_data, self.deposit, self.risk_per_trade)
+                    accuracy, profit = self.backtester.run(self.all_data, self.deposit, self.risk_per_trade, iterations=100)
                     log(f"Backtesting accuracy for {symbol}: {accuracy:.2%}, Profit: {profit:.2f}%")
 
                     # Анализируем результаты бэктестинга
@@ -226,8 +242,8 @@ class TradingBot:
                     self.models[symbol].train(X, y_direction, y_level)
 
                     # Перезаписываем модель
-                    log("Updating model in brain.model")
-                    save_model(self.models[symbol], "brain.model")
+                    model_filename = f"model_{symbol.replace('/', '_')}.pkl"
+                    save_model(self.models[symbol], model_filename)
 
                 time.sleep(60 * 60)
 
@@ -235,7 +251,7 @@ class TradingBot:
                 log(f"Error during bot execution: {e}", level="error")
                 traceback.print_exc()
                 time.sleep(60)
-                
+
     def calibrate_model(self):
         """
         Калибрует модель на основе результатов бэктестинга.
@@ -246,7 +262,7 @@ class TradingBot:
             # Добавляем больше данных для обучения
             for symbol in self.symbols:
                 log(f"Fetching additional historical data for {symbol}")
-                additional_data = self.data_fetcher.fetch_all_historical_data(symbol, self.timeframe)
+                additional_data = fetch_all_historical_data(symbol, self.timeframe)
                 if additional_data.empty:
                     log(f"No additional data for {symbol}. Skipping.", level="warning")
                     continue
@@ -312,12 +328,13 @@ class TradingBot:
             log(f"Model accuracy on test data after calibration: {accuracy:.2%}, MSE: {mse:.4f}")
 
             # Сохраняем модель в файл
-            save_model(self.model, "brain.model", None, self.lstm_model)
+            model_filename = f"model_{symbol.replace('/', '_')}.pkl"
+            save_model(self.model, model_filename)
 
         except Exception as e:
             log(f"Error during model calibration: {e}", level="error")
             traceback.print_exc()
-                
+
     def generate_explanation(self, latest_data, signal, entry_price, stop_loss, take_profit, position_size):
         """
         Генерирует объяснение для торгового решения.
@@ -329,7 +346,7 @@ class TradingBot:
         explanation += f"- EMA 20: {latest_data['ema_20'].iloc[0]:.2f} (mid-term trend)\n"
         explanation += f"- MACD: {latest_data['macd'].iloc[0]:.4f}, Signal: {latest_data['macd_signal'].iloc[0]:.4f} (trend dynamics)\n"
         explanation += f"- Volume Profile: {latest_data['volume_profile'].iloc[0]:.2f} (trading activity)\n"
-        explanation += f"- ATR: {latest_data['atr'].iloc[0]:.2f} (volatility)\n"
+        explanation += f"- ATR: {latest_data['atr_14'].iloc[0]:.2f} (volatility)\n"
         explanation += f"- Bollinger Bands: Upper {latest_data['upper_band'].iloc[0]:.2f}, Lower {latest_data['lower_band'].iloc[0]:.2f} (volatility boundaries)\n"
         explanation += f"- ADX: {latest_data['adx_14'].iloc[0]:.2f} (trend strength)\n"
         explanation += f"- OBV: {latest_data['obv'].iloc[0]:.2f} (volume flow)\n"
